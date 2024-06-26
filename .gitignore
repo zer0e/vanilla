@@ -22,3 +22,9 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+/vanilla-backend/.mvn/
+/vanilla-backend/mvnw.cmd
+/vanilla-backend/mvnw
+/vanilla-backend/.mvn/wrapper/maven-wrapper.properties
+/vanilla-backend/.idea/
+/vanilla-backend/.mvn/wrapper/
