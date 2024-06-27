@@ -1,0 +1,14 @@
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/vanilla
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: root
+    password: root
+
+logging:
+  level:
+    org.springframework.security: debug
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl

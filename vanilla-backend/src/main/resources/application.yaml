@@ -1,3 +1,8 @@
 spring:
+  profiles:
+    active: dev
   application:
     name: vanilla-backend
+server:
+  servlet:
+    context-path: /vanilla
