@@ -12,7 +12,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class ClusterVo {
     private Integer id;
-    private String name;
+    private String clusterName;
     @Schema(description = "描述")
     private String description;
 }

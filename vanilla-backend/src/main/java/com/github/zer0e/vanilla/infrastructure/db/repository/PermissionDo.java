@@ -3,19 +3,19 @@ package com.github.zer0e.vanilla.infrastructure.db.repository;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import lombok.*;
-import lombok.experimental.SuperBuilder;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
-@EqualsAndHashCode(callSuper = true)
+@Data
 @NoArgsConstructor
 @AllArgsConstructor
-@SuperBuilder
-@Data
-@ToString
-@TableName(value = "t_cluster")
-public class ClusterDo extends Base {
+@TableName("t_permission")
+public class PermissionDo {
     @TableId(type = IdType.AUTO)
-    private Integer id;
-    private String clusterName;
-    private String description;
+    private Integer Id;
+    /**
+     *
+     */
+    private String permissionName;
 }

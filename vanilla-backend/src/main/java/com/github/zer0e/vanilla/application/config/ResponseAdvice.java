@@ -23,6 +23,9 @@ public class ResponseAdvice implements ResponseBodyAdvice<Object> {
 
     @Override
     public Object beforeBodyWrite(Object body, MethodParameter returnType, MediaType selectedContentType, Class<? extends HttpMessageConverter<?>> selectedConverterType, ServerHttpRequest request, ServerHttpResponse response) {
+        if (request.getURI().getPath().contains("/v3/api-docs")) {
+            return body;
+        }
         if(body instanceof String){
             try {
                 response.getHeaders().setContentType(MediaType.parseMediaType(StringConstant.DEFAULT_CONTENT_TYPE));

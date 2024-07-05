@@ -26,12 +26,16 @@ public class XAuthUserFilter extends OncePerRequestFilter {
         String principal = request.getHeader(AUTH_HEADER_NAME);
 
         if (principal != null) {
-            UserDetails userDetails = userDetailsService.loadUserByUsername(principal);
-            if (userDetails != null) {
-                Authentication authentication = new UsernamePasswordAuthenticationToken(userDetails,
-                        null,
-                        userDetails.getAuthorities());
-                SecurityContextHolder.getContext().setAuthentication(authentication);
+            try {
+                UserDetails userDetails = userDetailsService.loadUserByUsername(principal);
+                if (userDetails != null) {
+                    Authentication authentication = new UsernamePasswordAuthenticationToken(userDetails,
+                            null,
+                            userDetails.getAuthorities());
+                    SecurityContextHolder.getContext().setAuthentication(authentication);
+                }
+            }catch (Exception e) {
+                logger.warn("get user detail err", e);
             }
         }
 

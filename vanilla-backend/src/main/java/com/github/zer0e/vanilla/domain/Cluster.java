@@ -5,8 +5,8 @@ import lombok.ToString;
 
 @Data
 @ToString
-public class Cluster{
+public class Cluster {
     private Integer id;
-    private String name;
+    private String clusterName;
     private String description;
 }
