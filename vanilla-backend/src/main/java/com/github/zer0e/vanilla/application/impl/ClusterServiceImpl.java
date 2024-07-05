@@ -19,6 +19,8 @@ import com.github.zer0e.vanilla.infrastructure.db.repository.RoleDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.UserRoleDo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.BeanUtils;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
@@ -38,6 +40,7 @@ public class ClusterServiceImpl implements ClusterService {
     private final ClusterMapper clusterMapper;
     private final UserRoleMapper userRoleMapper;
     private final UserService userService;
+    private final RedissonClient redissonClient;
 
     @Override
     @PreAuthorize("hasRole('admin')")
@@ -101,8 +104,13 @@ public class ClusterServiceImpl implements ClusterService {
         clusterMapper.updateById(clusterDo);
 
         List<Integer> userIds = updateClusterDto.getUserIds();
-        updateClusterUsers(userIds, updateClusterDto.getId());
-
+        RLock lock = redissonClient.getLock(StringConstant.LOCK_PREFIX + "cluster-" + updateClusterDto.getId());
+        try {
+            lock.lock();
+            updateClusterUsers(userIds, updateClusterDto.getId());
+        }finally {
+            lock.unlock();
+        }
         return ClusterConverter.INSTANCE.toVo(clusterDo);
     }
 
@@ -143,6 +151,12 @@ public class ClusterServiceImpl implements ClusterService {
         return userRoleMapper.selectUserRolesByClusterId(clusterId);
     }
 
+    /**
+     * 更新集群人员，需外围加锁
+     *
+     * @param userIds   the user ids
+     * @param clusterId the cluster id
+     */
     private void updateClusterUsers(Collection<Integer> userIds, Integer clusterId) {
         if (userIds == null) {
             userIds = Collections.emptyList();

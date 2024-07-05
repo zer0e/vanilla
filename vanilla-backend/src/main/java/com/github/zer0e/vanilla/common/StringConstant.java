@@ -9,4 +9,6 @@ public class StringConstant {
     public static final String CLUSTER_NOT_EXIST = "集群不存在";
     public static final String ROLE_NOT_EXIST = "角色不存在";
     public static final String USER_INFO_NOT_EXIST = "用户信息获取失败";
+    public static final String LOCK_PREFIX = "lock-";
+
 }
