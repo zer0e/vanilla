@@ -6,4 +6,5 @@ public class StringConstant {
 
     public static final String ROLE_PREFIX = "ROLE_";
     public static final String USER_CACHE_PREFIX = "USER_INFO_";
+    public static final String CLUSTER_NOT_EXIST = "集群不存在";
 }

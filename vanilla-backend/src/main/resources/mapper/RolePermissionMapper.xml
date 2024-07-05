@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="com.github.zer0e.vanilla.infrastructure.db.mapper.RolePermissionMapper">
+    <select id="selectRolePermissionByRoleIds"
+            resultType="com.github.zer0e.vanilla.infrastructure.db.repository.RolePermissionDo">
+        select t1.role_id, t1.permission_id from t_role_permission t1
+        <where>
+            t1.role_id in
+            <choose>
+                <when test="roleIds != null">
+                    <foreach collection="roleIds" item="roleId" separator="," open="(" close=")">
+                        #{roleId}
+                    </foreach>
+                </when>
+                <otherwise>
+                    ()
+                </otherwise>
+            </choose>
+        </where>
+    </select>
+</mapper>

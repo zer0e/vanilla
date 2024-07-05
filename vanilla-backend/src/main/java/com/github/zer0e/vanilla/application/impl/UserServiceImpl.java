@@ -1,15 +1,16 @@
 package com.github.zer0e.vanilla.application.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.zer0e.vanilla.application.UserService;
 import com.github.zer0e.vanilla.common.NumConstant;
 import com.github.zer0e.vanilla.common.StringConstant;
 import com.github.zer0e.vanilla.domain.User;
+import com.github.zer0e.vanilla.domain.UserRole;
 import com.github.zer0e.vanilla.domain.UserRolePermission;
 import com.github.zer0e.vanilla.infrastructure.converter.UserConverter;
-import com.github.zer0e.vanilla.infrastructure.db.mapper.RoleMapper;
-import com.github.zer0e.vanilla.infrastructure.db.mapper.UserMapper;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.*;
 import com.github.zer0e.vanilla.infrastructure.db.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +33,9 @@ import java.util.stream.Collectors;
 public class UserServiceImpl implements UserService, UserDetailsService {
     private final UserMapper userMapper;
     private final RoleMapper roleMapper;
+    private final UserRoleMapper userRoleMapper;
+    private final RolePermissionMapper rolePermissionMapper;
+    private final PermissionMapper permissionMapper;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
@@ -56,7 +60,7 @@ public class UserServiceImpl implements UserService, UserDetailsService {
         if (userDo == null) {
             return null;
         }
-        List<UserRoleDo> userRoles = roleMapper.selectRoleIdsByUserId(userDo.getId());
+        List<UserRoleDo> userRoles = userRoleMapper.selectRoleIdsByUserId(userDo.getId());
         List<UserRolePermission> authorities = new ArrayList<>();
 
 
@@ -130,14 +134,14 @@ public class UserServiceImpl implements UserService, UserDetailsService {
      * @return the role permission map
      */
     private Map<Integer, List<String>> getRolePermissionMap(List<Integer> roleIds) {
-        List<RolePermissionDo> rolePermissionDos = roleMapper.selectRolePermissionByRoleIds(roleIds);
+        List<RolePermissionDo> rolePermissionDos = rolePermissionMapper.selectRolePermissionByRoleIds(roleIds);
         // 权限id和名称对应关系
         Map<Integer, String> permissionMap = new HashMap<>();
         // 角色id和权限的对应关系
         Map<Integer, List<String>> rolePermissionMap = new HashMap<>();
         if (!CollectionUtils.isEmpty(rolePermissionDos)) {
             List<Integer> permissionIds = rolePermissionDos.stream().map(RolePermissionDo::getPermissionId).collect(Collectors.toList());
-            List<PermissionDo> permissionDos = roleMapper.selectPermissionByIds(permissionIds);
+            List<PermissionDo> permissionDos = permissionMapper.selectPermissionByIds(permissionIds);
             if (!CollectionUtils.isEmpty(permissionDos)) {
                 for (PermissionDo permissionDo : permissionDos) {
                     permissionMap.put(permissionDo.getId(), permissionDo.getPermissionName());
@@ -152,5 +156,13 @@ public class UserServiceImpl implements UserService, UserDetailsService {
 
         }
         return rolePermissionMap;
+    }
+
+    @Override
+    public List<UserRole> getClusterUserRoles(Integer clusterId) {
+        LambdaQueryWrapper<UserRole> lambdaQueryWrapper = new LambdaQueryWrapper<>();
+        lambdaQueryWrapper.eq(UserRole::getClusterId, clusterId);
+
+        return null;
     }
 }
