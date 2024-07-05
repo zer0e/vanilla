@@ -12,6 +12,7 @@ spring:
 logging:
   level:
     org.springframework.security: debug
+    com.github.zer0e: debug
 
 mybatis-plus:
   configuration:

@@ -7,13 +7,13 @@ import com.github.zer0e.vanilla.application.UserService;
 import com.github.zer0e.vanilla.common.NumConstant;
 import com.github.zer0e.vanilla.common.StringConstant;
 import com.github.zer0e.vanilla.domain.User;
-import com.github.zer0e.vanilla.domain.UserRole;
 import com.github.zer0e.vanilla.domain.UserRolePermission;
 import com.github.zer0e.vanilla.infrastructure.converter.UserConverter;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.*;
 import com.github.zer0e.vanilla.infrastructure.db.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -60,7 +60,7 @@ public class UserServiceImpl implements UserService, UserDetailsService {
         if (userDo == null) {
             return null;
         }
-        List<UserRoleDo> userRoles = userRoleMapper.selectRoleIdsByUserId(userDo.getId());
+        List<UserRoleDo> userRoles = userRoleMapper.selectUserRolesByUserId(userDo.getId());
         List<UserRolePermission> authorities = new ArrayList<>();
 
 
@@ -159,10 +159,16 @@ public class UserServiceImpl implements UserService, UserDetailsService {
     }
 
     @Override
-    public List<UserRole> getClusterUserRoles(Integer clusterId) {
-        LambdaQueryWrapper<UserRole> lambdaQueryWrapper = new LambdaQueryWrapper<>();
-        lambdaQueryWrapper.eq(UserRole::getClusterId, clusterId);
+    public List<UserRoleDo> getClusterUserRoles(Integer userId) {
+        LambdaQueryWrapper<UserRoleDo> lambdaQueryWrapper = new LambdaQueryWrapper<>();
+        lambdaQueryWrapper.eq(UserRoleDo::getUserId, userId)
+                .isNotNull(UserRoleDo::getClusterId);
+        return userRoleMapper.selectList(lambdaQueryWrapper);
+    }
 
-        return null;
+    @Override
+    @Cacheable(cacheNames = "roles", key = "'role_' + #roleName", unless = "#result==null")
+    public RoleDo getRoleByName(String roleName) {
+        return roleMapper.selectOne(new LambdaQueryWrapper<RoleDo>().eq(RoleDo::getRoleName, roleName));
     }
 }

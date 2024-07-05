@@ -6,12 +6,15 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
 
+import java.util.List;
+
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
 @ToString
-public class ClusterDto {
+public class CreateClusterDto {
     @NotNull(message = "集群名称不能为null")
     private String clusterName;
     private String description;
+    private List<Integer> userIds;
 }

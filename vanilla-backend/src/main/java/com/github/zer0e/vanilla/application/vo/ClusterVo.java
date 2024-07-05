@@ -6,6 +6,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+
 @Builder
 @AllArgsConstructor
 @Data
@@ -15,4 +17,12 @@ public class ClusterVo {
     private String clusterName;
     @Schema(description = "描述")
     private String description;
+
+    @Schema(description = "创建时间")
+    private LocalDateTime createTime;
+    private String createUser;
+
+    @Schema(description = "修改时间")
+    private LocalDateTime modifyTime;
+    private String modifyUser;
 }
