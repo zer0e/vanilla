@@ -5,15 +5,15 @@
             resultType="com.github.zer0e.vanilla.infrastructure.db.repository.RolePermissionDo">
         select t1.role_id, t1.permission_id from t_role_permission t1
         <where>
-            t1.role_id in
             <choose>
-                <when test="roleIds != null">
+                <when test="roleIds != null and roleIds.size > 0">
+                    t1.role_id in
                     <foreach collection="roleIds" item="roleId" separator="," open="(" close=")">
                         #{roleId}
                     </foreach>
                 </when>
                 <otherwise>
-                    ()
+                    1 = 0
                 </otherwise>
             </choose>
         </where>

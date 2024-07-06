@@ -20,4 +20,10 @@
             </choose>
         </where>
     </select>
+    <select id="selectHasPermissionStackIdsByUserId"
+            resultType="java.lang.Integer">
+        select t.stack_id from t_user_role t where
+                    t.user_id = #{userId}
+                    and t.stack_id is not null
+    </select>
 </mapper>

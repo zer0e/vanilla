@@ -78,18 +78,19 @@ public class UserServiceImpl implements UserService, UserDetailsService {
 
             for (UserRoleDo userRole : userRoles) {
                 Integer roleId = userRole.getRoleId();
+                Integer clusterId = userRole.getClusterId();
                 Integer stackId = userRole.getStackId();
 
                 String roleName = roleIdAndNameMap.get(roleId);
                 List<String> permissions = roleIdAndPermissionMap.get(roleId);
 
-                authorities.add(new UserRolePermission(stackId,
-                        StringConstant.ROLE_PREFIX + roleName));
+                authorities.add(new UserRolePermission(clusterId, stackId,
+                        true, roleName));
 
                 if (!CollectionUtils.isEmpty(permissions)) {
                     for (String permission : permissions) {
-                        authorities.add(new UserRolePermission(stackId,
-                                        permission));
+                        authorities.add(new UserRolePermission(clusterId, stackId,
+                                        false, permission));
                     }
                 }
 

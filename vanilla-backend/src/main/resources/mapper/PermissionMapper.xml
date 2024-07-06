@@ -5,15 +5,15 @@
             resultType="com.github.zer0e.vanilla.infrastructure.db.repository.PermissionDo">
         select * from t_permmission
         <where>
-            id in
             <choose>
-                <when test="ids != null">
+                <when test="ids != null and ids.size > 0">
+                    id in
                     <foreach collection="ids" item="id" separator="," open="(" close=")">
                         #{id}
                     </foreach>
                 </when>
                 <otherwise>
-                    ()
+                    1 = 0
                 </otherwise>
             </choose>
         </where>

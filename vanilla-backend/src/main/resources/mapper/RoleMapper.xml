@@ -6,15 +6,15 @@
     <select id="selectPermissionByRoleIds" resultType="java.lang.String">
         select t2.permission_name from t_role_permission t1, t_permission t2
         <where>
-            t1.role_id in
             <choose>
-                <when test="roleIds != null">
+                <when test="roleIds != null and roleIds.size > 0">
+                    t1.role_id in
                     <foreach collection="roleIds" item="roleId" separator="," open="(" close=")">
                         #{roleId}
                     </foreach>
                 </when>
                 <otherwise>
-                    ()
+                    1 = 0
                 </otherwise>
             </choose>
 
@@ -24,15 +24,15 @@
     <select id="selectRoleNameByIds" resultType="java.lang.String">
         select t.role_name from t_role t
         <where>
-            t.id in
             <choose>
-                <when test="ids != null">
+                <when test="ids != null and ids.size > 0">
+                    t.id in
                     <foreach collection="ids" item="id" separator="," open="(" close=")">
                         #{id}
                     </foreach>
                 </when>
                 <otherwise>
-                    ()
+                    1 = 0
                 </otherwise>
             </choose>
         </where>
@@ -40,15 +40,15 @@
     <select id="selectRoleByIds" resultType="com.github.zer0e.vanilla.infrastructure.db.repository.RoleDo">
         select * from t_role
         <where>
-            id in
             <choose>
-                <when test="ids != null">
+                <when test="ids != null and ids.size > 0">
+                    id in
                     <foreach collection="ids" item="id" separator="," open="(" close=")">
                         #{id}
                     </foreach>
                 </when>
                 <otherwise>
-                    ()
+                    1 = 0
                 </otherwise>
             </choose>
         </where>
