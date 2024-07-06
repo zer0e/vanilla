@@ -4,8 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.zer0e.vanilla.application.UserService;
-import com.github.zer0e.vanilla.common.NumConstant;
-import com.github.zer0e.vanilla.common.StringConstant;
+import com.github.zer0e.vanilla.common.Constants;
 import com.github.zer0e.vanilla.domain.User;
 import com.github.zer0e.vanilla.domain.UserRolePermission;
 import com.github.zer0e.vanilla.infrastructure.converter.UserConverter;
@@ -42,7 +41,7 @@ public class UserServiceImpl implements UserService, UserDetailsService {
 
     @Override
     public User loadUserByUsername(String username) throws UsernameNotFoundException {
-        String cacheKey = StringConstant.USER_CACHE_PREFIX + username;
+        String cacheKey = Constants.USER_CACHE_PREFIX + username;
         try {
             String userInfoCache = redisTemplate.opsForValue().get(cacheKey);
             if (userInfoCache != null) {
@@ -102,7 +101,7 @@ public class UserServiceImpl implements UserService, UserDetailsService {
         //set user cache
         try {
             redisTemplate.opsForValue().set(cacheKey, objectMapper.writeValueAsString(user),
-                    NumConstant.NUM_24,
+                    Constants.NUM_24,
                     TimeUnit.HOURS);
         }catch (Exception e) {
             log.warn("set user cache err", e);

@@ -3,7 +3,7 @@ package com.github.zer0e.vanilla.application.config.security;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.zer0e.vanilla.common.RestResponse;
-import com.github.zer0e.vanilla.common.StringConstant;
+import com.github.zer0e.vanilla.common.Constants;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -39,7 +39,7 @@ public class SecurityConfig {
             );
             NO_PERMISSION_MSG = objectMapper.writeValueAsString(
                     RestResponse.fail(HttpStatus.FORBIDDEN.value(),
-                            StringConstant.NO_PERMISSION
+                            Constants.NO_PERMISSION
                     ));
         } catch (JsonProcessingException e) {
             throw new RuntimeException(e);
@@ -56,13 +56,13 @@ public class SecurityConfig {
                             httpSecurityExceptionHandlingConfigurer.authenticationEntryPoint(
                                     (request, response, authException) -> {
                                         response.setStatus(HttpStatus.OK.value());
-                                        response.setContentType(StringConstant.DEFAULT_CONTENT_TYPE);
+                                        response.setContentType(Constants.DEFAULT_CONTENT_TYPE);
                                         response.getWriter().write(NO_LOGIN_MSG);
                                     }
                             );
                             httpSecurityExceptionHandlingConfigurer.accessDeniedHandler((request, response, accessDeniedException) -> {
                                 response.setStatus(HttpStatus.OK.value());
-                                response.setContentType(StringConstant.DEFAULT_CONTENT_TYPE);
+                                response.setContentType(Constants.DEFAULT_CONTENT_TYPE);
                                 response.getWriter().write(NO_PERMISSION_MSG);
                             });
                         }

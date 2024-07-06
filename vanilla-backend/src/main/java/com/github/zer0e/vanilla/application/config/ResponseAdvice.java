@@ -3,7 +3,7 @@ package com.github.zer0e.vanilla.application.config;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.zer0e.vanilla.common.RestResponse;
-import com.github.zer0e.vanilla.common.StringConstant;
+import com.github.zer0e.vanilla.common.Constants;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageConverter;
@@ -28,7 +28,7 @@ public class ResponseAdvice implements ResponseBodyAdvice<Object> {
         }
         if(body instanceof String){
             try {
-                response.getHeaders().setContentType(MediaType.parseMediaType(StringConstant.DEFAULT_CONTENT_TYPE));
+                response.getHeaders().setContentType(MediaType.parseMediaType(Constants.DEFAULT_CONTENT_TYPE));
                 return objectMapper.writeValueAsString(RestResponse.ok(body));
             } catch (JsonProcessingException e) {
                 throw new RuntimeException(e);

@@ -5,7 +5,7 @@ import com.github.zer0e.vanilla.application.UserService;
 import com.github.zer0e.vanilla.application.dto.CreateClusterDto;
 import com.github.zer0e.vanilla.application.dto.UpdateClusterDto;
 import com.github.zer0e.vanilla.application.vo.ClusterVo;
-import com.github.zer0e.vanilla.common.StringConstant;
+import com.github.zer0e.vanilla.common.Constants;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
 import com.github.zer0e.vanilla.common.util.SecurityUtil;
 import com.github.zer0e.vanilla.domain.ClusterRole;
@@ -48,18 +48,18 @@ public class ClusterServiceImpl implements ClusterService {
     public ClusterVo createCluster(CreateClusterDto createClusterDto) throws BusinessException {
         ClusterDo clusterDo = ClusterConverter.INSTANCE.toDo(createClusterDto);
         User currentUser = SecurityUtil.getCurrentUser();
-        Assert.notNull(currentUser, StringConstant.USER_INFO_NOT_EXIST);
+        Assert.notNull(currentUser, Constants.USER_INFO_NOT_EXIST);
         clusterDo.setCreateUser(currentUser.getLoginName());
         clusterDo.setCreateTime(LocalDateTime.now());
         clusterMapper.insert(clusterDo);
         Integer userId = SecurityUtil.getCurrentUserId();
         RoleDo clusterAdminRole = userService.getRoleByName(ClusterRole.CLUSTER_ADMIN.name().toLowerCase());
         if (clusterAdminRole == null) {
-            throw new BusinessException(StringConstant.ROLE_NOT_EXIST);
+            throw new BusinessException(Constants.ROLE_NOT_EXIST);
         }
         RoleDo clusterUserRole = userService.getRoleByName(ClusterRole.CLUSTER_USER.name().toLowerCase());
         if (clusterUserRole == null) {
-            throw new BusinessException(StringConstant.ROLE_NOT_EXIST);
+            throw new BusinessException(Constants.ROLE_NOT_EXIST);
         }
         UserRoleDo userRoleDo = UserRoleDo.builder()
                 .userId(userId)
@@ -94,17 +94,17 @@ public class ClusterServiceImpl implements ClusterService {
     public ClusterVo updateCluster(UpdateClusterDto updateClusterDto) throws BusinessException {
         ClusterDo clusterDo = clusterMapper.selectById(updateClusterDto.getId());
         if (clusterDo == null || clusterDo.getStatus() != DataStatus.EXIST.ordinal()) {
-            throw new BusinessException(StringConstant.CLUSTER_NOT_EXIST);
+            throw new BusinessException(Constants.CLUSTER_NOT_EXIST);
         }
         User currentUser = SecurityUtil.getCurrentUser();
-        Assert.notNull(currentUser, StringConstant.USER_INFO_NOT_EXIST);
+        Assert.notNull(currentUser, Constants.USER_INFO_NOT_EXIST);
         BeanUtils.copyProperties(updateClusterDto, clusterDo);
         clusterDo.setModifyTime(LocalDateTime.now());
         clusterDo.setModifyUser(currentUser.getLoginName());
         clusterMapper.updateById(clusterDo);
 
         List<Integer> userIds = updateClusterDto.getUserIds();
-        RLock lock = redissonClient.getLock(StringConstant.LOCK_PREFIX + "cluster-" + updateClusterDto.getId());
+        RLock lock = redissonClient.getLock(Constants.LOCK_PREFIX + "cluster-" + updateClusterDto.getId());
         try {
             lock.lock();
             updateClusterUsers(userIds, updateClusterDto.getId());
@@ -119,10 +119,10 @@ public class ClusterServiceImpl implements ClusterService {
     public void deleteCluster(Integer id) throws BusinessException {
         ClusterDo clusterDo = clusterMapper.selectById(id);
         if (clusterDo == null || clusterDo.getStatus() != DataStatus.EXIST.ordinal()) {
-            throw new BusinessException(StringConstant.CLUSTER_NOT_EXIST);
+            throw new BusinessException(Constants.CLUSTER_NOT_EXIST);
         }
         User currentUser = SecurityUtil.getCurrentUser();
-        Assert.notNull(currentUser, StringConstant.USER_INFO_NOT_EXIST);
+        Assert.notNull(currentUser, Constants.USER_INFO_NOT_EXIST);
         clusterDo.setStatus(DataStatus.NOT_EXIST.ordinal());
         clusterDo.setDeleteTime(LocalDateTime.now());
         clusterDo.setDeleteUser(currentUser.getLoginName());

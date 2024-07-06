@@ -1,7 +1,7 @@
 package com.github.zer0e.vanilla.application.config;
 
 import com.github.zer0e.vanilla.common.RestResponse;
-import com.github.zer0e.vanilla.common.StringConstant;
+import com.github.zer0e.vanilla.common.Constants;
 import com.github.zer0e.vanilla.common.exception.NoPermissionException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
@@ -20,7 +20,7 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler({NoPermissionException.class, AuthorizationDeniedException.class})
     public RestResponse<String> NoPermissionHandler() {
-        return RestResponse.fail(403, StringConstant.NO_PERMISSION);
+        return RestResponse.fail(403, Constants.NO_PERMISSION);
     }
 
     @ExceptionHandler(Throwable.class)

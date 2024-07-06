@@ -9,7 +9,7 @@ import com.github.zer0e.vanilla.application.dto.GetStacksDto;
 import com.github.zer0e.vanilla.application.dto.UpdateStackDto;
 import com.github.zer0e.vanilla.application.vo.StackVo;
 import com.github.zer0e.vanilla.common.PageData;
-import com.github.zer0e.vanilla.common.StringConstant;
+import com.github.zer0e.vanilla.common.Constants;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
 import com.github.zer0e.vanilla.common.util.SecurityUtil;
 import com.github.zer0e.vanilla.domain.DataStatus;
@@ -59,7 +59,7 @@ public class StackServiceImpl implements StackService {
         // 检查同一集群下是否有重名
         StackDo repeat = stackMapper.selectByClusterIdAndName(stackDo.getClusterId(), stackDo.getStackName());
         if (repeat != null) {
-            throw new BusinessException(StringConstant.STACK_DUPLICATE);
+            throw new BusinessException(Constants.STACK_DUPLICATE);
         }
 
         stackDo.setCreateUser(currentUserName);
@@ -68,7 +68,7 @@ public class StackServiceImpl implements StackService {
         stackMapper.insert(stackDo);
 
         RoleDo stackAdminRole = userService.getRoleByName(StackRole.STACK_ADMIN.name().toLowerCase());
-        Assert.notNull(stackAdminRole, StringConstant.ROLE_NOT_EXIST);
+        Assert.notNull(stackAdminRole, Constants.ROLE_NOT_EXIST);
 
         UserRoleDo userRoleDo = UserRoleDo.builder()
                 .userId(userId)
@@ -97,7 +97,7 @@ public class StackServiceImpl implements StackService {
         Integer id = updateStackDto.getId();
         StackDo stackDo = stackMapper.selectById(id);
         if (stackDo == null || stackDo.getStatus() != DataStatus.EXIST.ordinal()) {
-            throw new BusinessException(StringConstant.STACK_NOT_EXIST);
+            throw new BusinessException(Constants.STACK_NOT_EXIST);
         }
         BeanUtils.copyProperties(updateStackDto, stackDo);
         stackDo.setModifyTime(LocalDateTime.now());
@@ -118,7 +118,7 @@ public class StackServiceImpl implements StackService {
         Integer id = updateStackDto.getId();
         StackDo stackDo = stackMapper.selectById(id);
         if (stackDo == null || stackDo.getStatus() != DataStatus.EXIST.ordinal()) {
-            throw new BusinessException(StringConstant.STACK_NOT_EXIST);
+            throw new BusinessException(Constants.STACK_NOT_EXIST);
         }
         stackDo.setStatus(DataStatus.NOT_EXIST.ordinal());
         stackDo.setDeleteTime(LocalDateTime.now());
