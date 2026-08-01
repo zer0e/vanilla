@@ -2,7 +2,9 @@ package com.github.zer0e.vanilla.application.impl;
 
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
+import com.github.zer0e.vanilla.application.HistoryService;
 import com.github.zer0e.vanilla.application.SerService;
+import com.github.zer0e.vanilla.application.dto.CreateHistoryDto;
 import com.github.zer0e.vanilla.application.dto.CreateServiceDto;
 import com.github.zer0e.vanilla.application.dto.DeleteServiceDto;
 import com.github.zer0e.vanilla.application.dto.GetServicesDto;
@@ -36,6 +38,7 @@ public class SerServiceImpl implements SerService {
 
     private final ServiceMapper serviceMapper;
     private final StackMapper stackMapper;
+    private final HistoryService historyService;
 
     @Override
     @PreAuthorize("hasAnyRole('stack_' + #createServiceDto.stackId + '_stack_admin'," +
@@ -56,6 +59,7 @@ public class SerServiceImpl implements SerService {
         serviceDo.setCreateUser(currentUserName);
         serviceDo.setCreateTime(LocalDateTime.now());
         serviceMapper.insert(serviceDo);
+        recordHistory(serviceDo.getStackId(), "创建服务 " + serviceDo.getServiceName() + "，镜像：" + serviceDo.getImage());
         return ServiceConverter.INSTANCE.toVo(serviceDo);
     }
 
@@ -74,6 +78,7 @@ public class SerServiceImpl implements SerService {
         serviceDo.setModifyTime(LocalDateTime.now());
         serviceDo.setModifyUser(SecurityUtil.getCurrentUserName());
         serviceMapper.updateById(serviceDo);
+        recordHistory(serviceDo.getStackId(), "更新服务 " + serviceDo.getServiceName());
         return ServiceConverter.INSTANCE.toVo(serviceDo);
     }
 
@@ -91,6 +96,7 @@ public class SerServiceImpl implements SerService {
         serviceDo.setDeleteTime(LocalDateTime.now());
         serviceDo.setDeleteUser(SecurityUtil.getCurrentUserName());
         serviceMapper.updateById(serviceDo);
+        recordHistory(serviceDo.getStackId(), "删除服务 " + serviceDo.getServiceName());
     }
 
     @Override
@@ -107,5 +113,12 @@ public class SerServiceImpl implements SerService {
         List<ServiceVo> serviceVos = serviceDos.stream().map(ServiceConverter.INSTANCE::toVo).toList();
         PageInfo<ServiceDo> pageInfo = new PageInfo<>(serviceDos);
         return new PageData<>(page, size, pageInfo.getTotal(), serviceVos);
+    }
+
+    private void recordHistory(Integer stackId, String event) {
+        CreateHistoryDto createHistoryDto = new CreateHistoryDto();
+        createHistoryDto.setStackId(stackId);
+        createHistoryDto.setEvent(event);
+        historyService.createHistory(createHistoryDto);
     }
 }
