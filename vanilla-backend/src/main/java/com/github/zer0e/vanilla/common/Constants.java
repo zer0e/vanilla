@@ -21,6 +21,10 @@ public interface Constants {
     String VOLUME_NOT_EXIST = "卷不存在";
     String CLUSTER_TYPE_NOT_SUPPORT = "暂不支持该集群类型";
     String CLUSTER_ENDPOINT_NOT_CONFIG = "集群连接地址未配置";
+    String DEPLOY_FAIL = "部署失败";
+    String CONTAINER_NAME_PREFIX = "vanilla-";
+    String STACK_ID_LABEL = "com.vanilla.stack_id";
+    String SERVICE_ID_LABEL = "com.vanilla.service_id";
 
     int NUM_24 = 24;
     int NUM_60 = 60;
