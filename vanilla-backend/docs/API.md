@@ -279,15 +279,56 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 ---
 
-## 7. 部署生命周期 `/stack/api`
+## 7. 用户管理 `/user/api`
 
-### 7.1 部署栈 `POST /stack/api/v1/deploy`
+**角色**：以下端点均需 `admin`。
+
+### 7.1 创建用户 `POST /v1/create`
+
+请求体：`{nikeName*, loginName*, status?, roles?}`，`roles` 为角色绑定数组：
+
+| 字段 | 说明 |
+|---|---|
+| roleName | `admin` / `user`（全局）或 `cluster_admin` / `cluster_user`（需 clusterId）或 `stack_admin` / `stack_member` / `stack_readonly`（需 stackId） |
+| clusterId | 集群角色必填 |
+| stackId | 栈角色必填 |
+
+```json
+{"nikeName": "Dev One", "loginName": "dev1", "roles": [{"roleName": "user"}]}
+```
+
+### 7.2 修改用户 `POST /v1/update`
+
+请求体：`{id*, nikeName?, status?, roles?}`。`roles` 为 `null` 时不修改角色，非 `null` 时**全量替换**。
+
+### 7.3 删除用户 `POST /v1/delete`
+
+请求体：`{id*}`。置 `status=1` 禁用并清空角色绑定，账号即刻失效（未授权访问返回 401）。
+
+### 7.4 用户列表 `POST /v1/list`
+
+请求体：`{page?, size?, search?}`，按登录名/昵称模糊搜索。响应含角色绑定列表。
+
+---
+
+## 8. 部署生命周期 `/stack/api`
+
+### 8.1 部署栈 `POST /stack/api/v1/deploy`
 
 **角色**：`ROLE_stack_{stackId}_stack_admin`
 
 请求体：`{stackId*}`
 
-流程：清空同栈旧容器 → **宿主端口全局预校验** → 逐服务「拉镜像 → 按副本创建并启动容器」。失败自动回滚清理。
+流程：**宿主端口全局预校验** → 逐服务「拉镜像 → 按更新策略创建/替换容器」→ 清理孤儿容器。失败自动回滚清理。
+
+**更新策略**（`service.strategy`）：
+
+| 策略 | 行为 |
+|---|---|
+| `Recreate`（默认） | 删除该服务旧容器后按副本数全量创建 |
+| `RollingUpdate` | 逐副本「停旧 → 建新」，其余副本持续对外服务；副本数变化时退化为全量重建 |
+
+> 部署不再整栈先删：同一栈内其他服务在重部署期间保持运行。
 
 **响应**（`StackStatusVo`）：
 
@@ -308,7 +349,7 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 **容器标签**：`com.vanilla.stack_id`、`com.vanilla.service_id`（用于状态统计与清理）。
 
-### 7.2 查询状态 `POST /stack/api/v1/status`
+### 8.2 查询状态 `POST /stack/api/v1/status`
 
 **角色**：`stack_admin` / `member` / `readonly`
 
@@ -323,17 +364,17 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 | `PARTIAL` | 部分服务/副本运行 |
 | `NONE` | 无任何容器 |
 
-### 7.3 停止栈 `POST /stack/api/v1/stop`
+### 8.3 停止栈 `POST /stack/api/v1/stop`
 
 **角色**：`stack_admin`。停止栈下所有容器（不删除）。
 
-### 7.4 下架栈 `POST /stack/api/v1/remove`
+### 8.4 下架栈 `POST /stack/api/v1/remove`
 
 **角色**：`stack_admin`。删除栈下所有容器（含停止的）。
 
 ---
 
-## 8. Swagger / OpenAPI
+## 9. Swagger / OpenAPI
 
 - UI：`http://localhost:8080/vanilla/doc.html`（Knife4j）
 - OpenAPI JSON：`http://localhost:8080/vanilla/v3/api-docs`

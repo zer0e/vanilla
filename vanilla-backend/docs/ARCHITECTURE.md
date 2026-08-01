@@ -79,6 +79,7 @@ role=true 时前缀 ROLE_：
 | 操作 | 所需角色 |
 |---|---|
 | 集群 create/update/delete | `ROLE_admin` |
+| 用户 create/update/delete/list | `ROLE_admin` |
 | 栈 create / list | 对应集群的 `cluster_admin` 或 `cluster_user` |
 | 栈 update/delete、部署/停止/下架 | 对应栈的 `stack_admin` |
 | 服务/端口/卷 create | `stack_admin` 或 `stack_member` |
@@ -103,17 +104,18 @@ role=true 时前缀 ROLE_：
 deployStack(stackId)
   ├─ getStack()                         # 校验栈存在
   ├─ dockerClientFactory.getClient()    # 取/建连接
-  ├─ removeStackContainers()            # 幂等清理同栈旧容器
   ├─ validateHostPorts()                # 宿主端口全局预校验（跨服务/副本）
   ├─ for service in services:
   │    pullImage()                      # 同步拉取镜像
-  │    for i in replicas:
-  │      createContainer()              # env / 端口 / 资源限制 / 标签
-  │      startContainer()
+  │    ├─ Recreate（默认）：删旧 → 按副本数创建并启动
+  │    └─ RollingUpdate：逐副本「停旧 → 建新」（副本数变化退化为 Recreate）
+  ├─ removeOrphanContainers()           # 清理已删除服务的残留容器
   ├─ catch BusinessException → 回滚清理容器
   ├─ recordHistory()
   └─ getStackStatus()                   # 返回运行状态
 ```
+
+部署按服务维度进行，不再整栈先删；同栈其他服务在重部署期间保持运行。
 
 **容器约定**
 

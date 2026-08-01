@@ -18,6 +18,8 @@
   - 停止 / 下架：幂等操作，部署前自动清理同栈旧容器
   - 部署前**宿主端口全局预校验**，冲突快速失败；中途失败自动回滚清理
 - **RBAC 鉴权**：`admin`（全局）→ `cluster_admin / cluster_user`（集群级）→ `stack_admin / stack_member / stack_readonly`（栈级）
+- **用户管理**：用户 CRUD + 角色绑定（全局/集群/栈作用域），变更即时失效缓存
+- **更新策略**：`Recreate`（默认，先删后建）与 `RollingUpdate`（逐副本替换，其余副本持续服务；副本数变化时退化为全量重建）
 - **操作历史**：栈下所有操作留痕（创建/更新/删除/部署/停止/下架）
 - 统一响应封装、全局异常处理、接口文档（Knife4j / OpenAPI 3）
 
@@ -191,6 +193,10 @@ docker exec <redis> redis-cli DEL USER_INFO_admin
 | | `POST /volume/api/v1/delete` | 删除卷 |
 | | `POST /volume/api/v1/list` | 分页查询卷 |
 | 历史 | `POST /history/api/v1/list` | 查询栈操作历史 |
+| 用户 | `POST /user/api/v1/create` | 创建用户 + 角色绑定（需 admin） |
+| | `POST /user/api/v1/update` | 修改用户 / 替换角色（需 admin） |
+| | `POST /user/api/v1/delete` | 禁用用户 + 清角色（需 admin） |
+| | `POST /user/api/v1/list` | 分页查询用户（需 admin） |
 
 完整字段、鉴权角色与响应示例见 **[docs/API.md](docs/API.md)**。
 
@@ -217,5 +223,5 @@ docker exec <redis> redis-cli DEL USER_INFO_admin
 
 ## 测试验证
 
-- **单元测试**：`DeployServiceImplTest`（11 个用例，Mockito）锁住部署核心逻辑——端口绑定写入 HostConfig、宿主端口跨服务冲突预校验、容器命名、状态映射、失败回滚。运行：`./mvnw test`（无需外部依赖，Spring 上下文测试已标注 `@Disabled`）。
+- **单元测试**：`DeployServiceImplTest`（14 个用例，Mockito）锁住部署核心逻辑——端口绑定写入 HostConfig、宿主端口跨服务冲突预校验、容器命名、状态映射、失败回滚、Recreate 先删后建、RollingUpdate 逐副本替换。运行：`./mvnw test`（无需外部依赖，Spring 上下文测试已标注 `@Disabled`）。
 - **端到端验证**：已在云主机（Alibaba Cloud Linux 4 + Docker 24.0.9 + MySQL 8.0 + Redis 7.2）跑通集群/栈/服务/端口/卷 CRUD、RBAC、部署→状态→停止→重新部署→下架、多副本（端口偏移）与多服务场景。回归测试中发现的端口映射丢失、多副本端口冲突、软删除过滤等缺陷均已修复并固化为测试。
