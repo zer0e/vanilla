@@ -217,4 +217,5 @@ docker exec <redis> redis-cli DEL USER_INFO_admin
 
 ## 测试验证
 
-已在云主机（Alibaba Cloud Linux 4 + Docker 24.0.9 + MySQL 8.0 + Redis 7.2）完成端到端验证：集群/栈/服务/端口/卷 CRUD、RBAC、部署→状态→停止→重新部署→下架、多副本（端口偏移）与多服务场景。回归测试中发现的端口映射丢失、多副本端口冲突、软删除过滤等缺陷均已修复。
+- **单元测试**：`DeployServiceImplTest`（11 个用例，Mockito）锁住部署核心逻辑——端口绑定写入 HostConfig、宿主端口跨服务冲突预校验、容器命名、状态映射、失败回滚。运行：`./mvnw test`（无需外部依赖，Spring 上下文测试已标注 `@Disabled`）。
+- **端到端验证**：已在云主机（Alibaba Cloud Linux 4 + Docker 24.0.9 + MySQL 8.0 + Redis 7.2）跑通集群/栈/服务/端口/卷 CRUD、RBAC、部署→状态→停止→重新部署→下架、多副本（端口偏移）与多服务场景。回归测试中发现的端口映射丢失、多副本端口冲突、软删除过滤等缺陷均已修复并固化为测试。

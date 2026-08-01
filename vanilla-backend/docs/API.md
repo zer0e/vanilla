@@ -333,17 +333,7 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 ---
 
-## 8. 测试接口 `/test/api/`
-
-| 路径 | 角色 | 说明 |
-|---|---|---|
-| `POST /v1/start` | `user` | 返回当前登录用户名 |
-| `POST /v1/error` | `user` | 触发异常，验证全局异常处理 |
-| `POST /v1/test` | 已登录 | 读取 `admin` 角色名 |
-
----
-
-## 9. Swagger / OpenAPI
+## 8. Swagger / OpenAPI
 
 - UI：`http://localhost:8080/vanilla/doc.html`（Knife4j）
 - OpenAPI JSON：`http://localhost:8080/vanilla/v3/api-docs`
