@@ -1,9 +1,12 @@
 package com.github.zer0e.vanilla.web.controller;
 
+import com.github.zer0e.vanilla.application.DeployService;
 import com.github.zer0e.vanilla.application.StackService;
 import com.github.zer0e.vanilla.application.dto.CreateStackDto;
+import com.github.zer0e.vanilla.application.dto.DeployStackDto;
 import com.github.zer0e.vanilla.application.dto.GetStacksDto;
 import com.github.zer0e.vanilla.application.dto.UpdateStackDto;
+import com.github.zer0e.vanilla.application.vo.StackStatusVo;
 import com.github.zer0e.vanilla.application.vo.StackVo;
 import com.github.zer0e.vanilla.common.PageData;
 import com.github.zer0e.vanilla.common.RestResponse;
@@ -24,6 +27,8 @@ import org.springframework.web.bind.annotation.RestController;
 public class StackController {
 
     private final StackService stackService;
+    private final DeployService deployService;
+
     @PostMapping("/v1/create")
     @Operation(summary = "创建栈")
     public RestResponse<StackVo> createStack(@RequestBody @Valid CreateStackDto createStackDto) throws BusinessException {
@@ -47,5 +52,31 @@ public class StackController {
     @Operation(summary = "获取集群下有权限的栈")
     public RestResponse<PageData<StackVo>> deleteStack(@RequestBody @Valid GetStacksDto getStacksDto) throws BusinessException {
         return RestResponse.ok(stackService.getStacks(getStacksDto));
+    }
+
+    @PostMapping("/v1/deploy")
+    @Operation(summary = "部署栈到目标集群")
+    public RestResponse<StackStatusVo> deployStack(@RequestBody @Valid DeployStackDto deployStackDto) throws BusinessException {
+        return RestResponse.ok(deployService.deployStack(deployStackDto));
+    }
+
+    @PostMapping("/v1/status")
+    @Operation(summary = "查询栈运行状态")
+    public RestResponse<StackStatusVo> getStackStatus(@RequestBody @Valid DeployStackDto deployStackDto) throws BusinessException {
+        return RestResponse.ok(deployService.getStackStatus(deployStackDto));
+    }
+
+    @PostMapping("/v1/stop")
+    @Operation(summary = "停止栈")
+    public RestResponse<Void> stopStack(@RequestBody @Valid DeployStackDto deployStackDto) throws BusinessException {
+        deployService.stopStack(deployStackDto);
+        return RestResponse.ok(null);
+    }
+
+    @PostMapping("/v1/remove")
+    @Operation(summary = "下架栈")
+    public RestResponse<Void> removeStack(@RequestBody @Valid DeployStackDto deployStackDto) throws BusinessException {
+        deployService.removeStack(deployStackDto);
+        return RestResponse.ok(null);
     }
 }
