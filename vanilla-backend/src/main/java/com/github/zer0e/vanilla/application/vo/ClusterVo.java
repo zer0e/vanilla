@@ -18,6 +18,18 @@ public class ClusterVo {
     @Schema(description = "描述")
     private String description;
 
+    @Schema(description = "集群类型 DOCKER / K8S")
+    private String type;
+
+    @Schema(description = "Docker daemon 连接地址")
+    private String endpoint;
+
+    @Schema(description = "是否启用 TLS 校验")
+    private Boolean tlsVerify;
+
+    @Schema(description = "Docker TLS 证书目录")
+    private String dockerCertPath;
+
     @Schema(description = "创建时间")
     private LocalDateTime createTime;
     private String createUser;

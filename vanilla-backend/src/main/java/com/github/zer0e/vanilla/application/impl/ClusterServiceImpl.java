@@ -9,6 +9,7 @@ import com.github.zer0e.vanilla.common.Constants;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
 import com.github.zer0e.vanilla.common.util.SecurityUtil;
 import com.github.zer0e.vanilla.domain.ClusterRole;
+import com.github.zer0e.vanilla.domain.ClusterType;
 import com.github.zer0e.vanilla.domain.DataStatus;
 import com.github.zer0e.vanilla.domain.User;
 import com.github.zer0e.vanilla.infrastructure.converter.ClusterConverter;
@@ -47,6 +48,12 @@ public class ClusterServiceImpl implements ClusterService {
     @Transactional
     public ClusterVo createCluster(CreateClusterDto createClusterDto) throws BusinessException {
         ClusterDo clusterDo = ClusterConverter.INSTANCE.toDo(createClusterDto);
+        if (clusterDo.getType() == null) {
+            clusterDo.setType(ClusterType.DOCKER.name());
+        }
+        if (clusterDo.getTlsVerify() == null) {
+            clusterDo.setTlsVerify(false);
+        }
         User currentUser = SecurityUtil.getCurrentUser();
         Assert.notNull(currentUser, Constants.USER_INFO_NOT_EXIST);
         clusterDo.setCreateUser(currentUser.getLoginName());
