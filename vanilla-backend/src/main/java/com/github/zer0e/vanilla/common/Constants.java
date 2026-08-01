@@ -15,6 +15,10 @@ public interface Constants {
     String STACK_NOT_EXIST = "栈不存在";
     String SERVICE_DUPLICATE = "服务名重复";
     String SERVICE_NOT_EXIST = "服务不存在";
+    String PORT_DUPLICATE = "端口已存在";
+    String PORT_NOT_EXIST = "端口不存在";
+    String VOLUME_DUPLICATE = "卷名重复";
+    String VOLUME_NOT_EXIST = "卷不存在";
 
     int NUM_24 = 24;
     int NUM_60 = 60;
