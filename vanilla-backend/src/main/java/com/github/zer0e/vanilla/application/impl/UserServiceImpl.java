@@ -3,8 +3,20 @@ package com.github.zer0e.vanilla.application.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.pagehelper.PageHelper;
+import com.github.pagehelper.PageInfo;
 import com.github.zer0e.vanilla.application.UserService;
+import com.github.zer0e.vanilla.application.dto.CreateUserDto;
+import com.github.zer0e.vanilla.application.dto.DeleteUserDto;
+import com.github.zer0e.vanilla.application.dto.GetUsersDto;
+import com.github.zer0e.vanilla.application.dto.RoleBindingDto;
+import com.github.zer0e.vanilla.application.dto.UpdateUserDto;
+import com.github.zer0e.vanilla.application.vo.UserRoleBindingVo;
+import com.github.zer0e.vanilla.application.vo.UserVo;
 import com.github.zer0e.vanilla.common.Constants;
+import com.github.zer0e.vanilla.common.PageData;
+import com.github.zer0e.vanilla.common.exception.BusinessException;
+import com.github.zer0e.vanilla.common.util.SecurityUtil;
 import com.github.zer0e.vanilla.domain.User;
 import com.github.zer0e.vanilla.domain.UserRolePermission;
 import com.github.zer0e.vanilla.infrastructure.converter.UserConverter;
@@ -17,12 +29,16 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -38,6 +54,9 @@ public class UserServiceImpl implements UserService, UserDetailsService {
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+
+    private static final Set<String> CLUSTER_ROLES = Set.of("cluster_admin", "cluster_user");
+    private static final Set<String> STACK_ROLES = Set.of("stack_admin", "stack_member", "stack_readonly");
 
     @Override
     public User loadUserByUsername(String username) throws UsernameNotFoundException {
@@ -170,5 +189,137 @@ public class UserServiceImpl implements UserService, UserDetailsService {
     @Cacheable(cacheNames = "roles", key = "'role_' + #roleName", unless = "#result==null")
     public RoleDo getRoleByName(String roleName) {
         return roleMapper.selectOne(new LambdaQueryWrapper<RoleDo>().eq(RoleDo::getRoleName, roleName));
+    }
+
+    @Override
+    public PageData<UserVo> getUsers(GetUsersDto getUsersDto) throws BusinessException {
+        Integer page = getUsersDto.getPage() == null ? 1 : getUsersDto.getPage();
+        Integer size = getUsersDto.getSize() == null ? 15 : getUsersDto.getSize();
+        PageHelper.startPage(page, size);
+        List<UserDo> userDos = userMapper.selectUsersBySearch(getUsersDto.getSearch());
+        List<UserVo> userVos = userDos.stream().map(this::toUserVo).toList();
+        PageInfo<UserDo> pageInfo = new PageInfo<>(userDos);
+        return new PageData<>(page, size, pageInfo.getTotal(), userVos);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public UserVo createUser(CreateUserDto createUserDto) throws BusinessException {
+        UserDo exist = userMapper.selectOne(new LambdaQueryWrapper<UserDo>()
+                .eq(UserDo::getLoginName, createUserDto.getLoginName()));
+        if (exist != null) {
+            throw new BusinessException(Constants.USER_EXIST);
+        }
+        UserDo userDo = new UserDo();
+        userDo.setNikeName(createUserDto.getNikeName());
+        userDo.setLoginName(createUserDto.getLoginName());
+        userDo.setStatus(createUserDto.getStatus() == null ? 0 : createUserDto.getStatus());
+        userDo.setCreateTime(LocalDateTime.now());
+        userMapper.insert(userDo);
+        if (!CollectionUtils.isEmpty(createUserDto.getRoles())) {
+            replaceRoles(userDo, createUserDto.getRoles());
+        }
+        return toUserVo(userDo);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public UserVo updateUser(UpdateUserDto updateUserDto) throws BusinessException {
+        UserDo userDo = userMapper.selectById(updateUserDto.getId());
+        if (userDo == null) {
+            throw new BusinessException(Constants.USER_NOT_EXIST);
+        }
+        if (updateUserDto.getNikeName() != null) {
+            userDo.setNikeName(updateUserDto.getNikeName());
+        }
+        if (updateUserDto.getStatus() != null) {
+            userDo.setStatus(updateUserDto.getStatus());
+        }
+        userMapper.updateById(userDo);
+        if (updateUserDto.getRoles() != null) {
+            replaceRoles(userDo, updateUserDto.getRoles());
+        }
+        invalidateUserCache(userDo.getLoginName());
+        return toUserVo(userDo);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteUser(DeleteUserDto deleteUserDto) throws BusinessException {
+        UserDo userDo = userMapper.selectById(deleteUserDto.getId());
+        if (userDo == null) {
+            throw new BusinessException(Constants.USER_NOT_EXIST);
+        }
+        // 禁用 + 清除角色绑定，使账号失效
+        userDo.setStatus(1);
+        userMapper.updateById(userDo);
+        userRoleMapper.delete(new LambdaQueryWrapper<UserRoleDo>().eq(UserRoleDo::getUserId, userDo.getId()));
+        invalidateUserCache(userDo.getLoginName());
+    }
+
+    private UserVo toUserVo(UserDo userDo) {
+        UserVo vo = new UserVo();
+        vo.setId(userDo.getId());
+        vo.setNikeName(userDo.getNikeName());
+        vo.setLoginName(userDo.getLoginName());
+        vo.setStatus(userDo.getStatus());
+        vo.setCreateTime(userDo.getCreateTime());
+        vo.setRoles(getUserRoleBindings(userDo.getId()));
+        return vo;
+    }
+
+    private List<UserRoleBindingVo> getUserRoleBindings(Integer userId) {
+        List<UserRoleDo> userRoles = userRoleMapper.selectUserRolesByUserId(userId);
+        if (CollectionUtils.isEmpty(userRoles)) {
+            return Collections.emptyList();
+        }
+        Map<Integer, String> roleNames = getRoleMap(userRoles.stream().map(UserRoleDo::getRoleId).toList());
+        return userRoles.stream().map(userRole -> {
+            UserRoleBindingVo binding = new UserRoleBindingVo();
+            binding.setRoleId(userRole.getRoleId());
+            binding.setRoleName(roleNames.get(userRole.getRoleId()));
+            binding.setClusterId(userRole.getClusterId());
+            binding.setStackId(userRole.getStackId());
+            return binding;
+        }).toList();
+    }
+
+    /**
+     * 全量替换用户角色绑定（删除旧绑定后写入新绑定）
+     */
+    private void replaceRoles(UserDo user, List<RoleBindingDto> bindings) throws BusinessException {
+        userRoleMapper.delete(new LambdaQueryWrapper<UserRoleDo>().eq(UserRoleDo::getUserId, user.getId()));
+        List<UserRoleDo> userRoles = new ArrayList<>();
+        for (RoleBindingDto binding : bindings) {
+            RoleDo role = getRoleByName(binding.getRoleName());
+            if (role == null) {
+                throw new BusinessException(Constants.ROLE_NOT_EXIST);
+            }
+            if (CLUSTER_ROLES.contains(binding.getRoleName()) && binding.getClusterId() == null) {
+                throw new BusinessException(Constants.CLUSTER_ROLE_NEED_CLUSTER);
+            }
+            if (STACK_ROLES.contains(binding.getRoleName()) && binding.getStackId() == null) {
+                throw new BusinessException(Constants.STACK_ROLE_NEED_STACK);
+            }
+            userRoles.add(UserRoleDo.builder()
+                    .userId(user.getId())
+                    .roleId(role.getId())
+                    .clusterId(binding.getClusterId())
+                    .stackId(binding.getStackId())
+                    .createUser(SecurityUtil.getCurrentUserName())
+                    .createTime(LocalDateTime.now())
+                    .build());
+        }
+        if (!userRoles.isEmpty()) {
+            userRoleMapper.insert(userRoles);
+        }
+    }
+
+    private void invalidateUserCache(String loginName) {
+        try {
+            redisTemplate.delete(Constants.USER_CACHE_PREFIX + loginName);
+        } catch (Exception e) {
+            log.warn("invalidate user cache err, loginName={}", loginName, e);
+        }
     }
 }

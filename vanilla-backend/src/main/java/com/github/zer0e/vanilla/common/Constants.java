@@ -9,6 +9,10 @@ public interface Constants {
     String CLUSTER_NOT_EXIST = "集群不存在";
     String ROLE_NOT_EXIST = "角色不存在";
     String USER_INFO_NOT_EXIST = "用户信息获取失败";
+    String USER_EXIST = "用户名已存在";
+    String USER_NOT_EXIST = "用户不存在";
+    String CLUSTER_ROLE_NEED_CLUSTER = "集群角色需指定集群";
+    String STACK_ROLE_NEED_STACK = "栈角色需指定栈";
     String LOCK_PREFIX = "lock-";
     String UNDER_LINE = "_";
     String STACK_DUPLICATE = "栈名重复";
