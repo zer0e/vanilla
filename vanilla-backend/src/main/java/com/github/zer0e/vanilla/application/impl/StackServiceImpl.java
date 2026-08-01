@@ -2,8 +2,10 @@ package com.github.zer0e.vanilla.application.impl;
 
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
+import com.github.zer0e.vanilla.application.HistoryService;
 import com.github.zer0e.vanilla.application.StackService;
 import com.github.zer0e.vanilla.application.UserService;
+import com.github.zer0e.vanilla.application.dto.CreateHistoryDto;
 import com.github.zer0e.vanilla.application.dto.CreateStackDto;
 import com.github.zer0e.vanilla.application.dto.GetStacksDto;
 import com.github.zer0e.vanilla.application.dto.UpdateStackDto;
@@ -39,6 +41,7 @@ public class StackServiceImpl implements StackService {
     private final StackMapper stackMapper;
     private final UserService userService;
     private final UserRoleMapper userRoleMapper;
+    private final HistoryService historyService;
     /**
      * Create stack stack vo.
      *
@@ -79,6 +82,7 @@ public class StackServiceImpl implements StackService {
                 .build();
 
         userRoleMapper.insert(userRoleDo);
+        recordHistory(stackDo.getId(), "创建栈 " + stackDo.getStackName());
 
         return StackConverter.INSTANCE.toVo(stackDo);
     }
@@ -103,6 +107,7 @@ public class StackServiceImpl implements StackService {
         stackDo.setModifyTime(LocalDateTime.now());
         stackDo.setModifyUser(SecurityUtil.getCurrentUserName());
         stackMapper.updateById(stackDo);
+        recordHistory(stackDo.getId(), "更新栈 " + stackDo.getStackName());
         return StackConverter.INSTANCE.toVo(stackDo);
     }
 
@@ -124,6 +129,7 @@ public class StackServiceImpl implements StackService {
         stackDo.setDeleteTime(LocalDateTime.now());
         stackDo.setDeleteUser(SecurityUtil.getCurrentUserName());
         stackMapper.updateById(stackDo);
+        recordHistory(stackDo.getId(), "删除栈 " + stackDo.getStackName());
 
     }
 
@@ -150,5 +156,12 @@ public class StackServiceImpl implements StackService {
         List<StackVo> stackVos = stackDos.stream().map(StackConverter.INSTANCE::toVo).toList();
         PageInfo<StackDo> pageInfo = new PageInfo<>(stackDos);
         return new PageData<>(page, size, pageInfo.getTotal(), stackVos);
+    }
+
+    private void recordHistory(Integer stackId, String event) {
+        CreateHistoryDto createHistoryDto = new CreateHistoryDto();
+        createHistoryDto.setStackId(stackId);
+        createHistoryDto.setEvent(event);
+        historyService.createHistory(createHistoryDto);
     }
 }
