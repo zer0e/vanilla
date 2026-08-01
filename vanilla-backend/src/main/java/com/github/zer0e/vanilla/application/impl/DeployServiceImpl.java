@@ -56,8 +56,15 @@ public class DeployServiceImpl implements DeployService {
         DockerClient client = dockerClientFactory.getClient(stack.getClusterId());
         removeStackContainers(client, stack.getId());
         List<ServiceDo> services = serviceMapper.selectServicesByStackIdAndSearch(stack.getId(), null);
-        for (ServiceDo service : services) {
-            deployService(client, stack, service);
+        validateHostPorts(stack.getId(), services);
+        try {
+            for (ServiceDo service : services) {
+                deployService(client, stack, service);
+            }
+        } catch (BusinessException e) {
+            // 部署失败时清理已创建容器，避免残留部分状态
+            removeStackContainers(client, stack.getId());
+            throw e;
         }
         recordHistory(stack.getId(), "部署栈 " + stack.getStackName());
         return getStackStatus(deployStackDto);
@@ -120,6 +127,29 @@ public class DeployServiceImpl implements DeployService {
         DockerClient client = dockerClientFactory.getClient(stack.getClusterId());
         removeStackContainers(client, stack.getId());
         recordHistory(stack.getId(), "下架栈 " + stack.getStackName());
+    }
+
+    /**
+     * 校验整个栈的宿主端口分配：每个服务每个副本占用 port + index 宿主端口，
+     * 跨服务/副本重复时在创建容器前快速失败，避免部分部署
+     */
+    private void validateHostPorts(Integer stackId, List<ServiceDo> services) throws BusinessException {
+        Map<Integer, String> allocated = new HashMap<>();
+        for (ServiceDo service : services) {
+            List<PortDo> ports = portMapper.selectPortsByServiceId(service.getId());
+            int replicas = service.getReplicas() == null ? 1 : Math.max(1, service.getReplicas());
+            for (PortDo port : ports) {
+                for (int i = 0; i < replicas; i++) {
+                    int hostPort = port.getPort() + i;
+                    String owner = "服务[" + service.getServiceName() + "] 副本" + i;
+                    String exist = allocated.putIfAbsent(hostPort, owner);
+                    if (exist != null) {
+                        throw new BusinessException("宿主端口 " + hostPort + " 冲突：" + exist
+                                + " 与 " + owner + " 重复，请调整服务端口配置");
+                    }
+                }
+            }
+        }
     }
 
     /**
