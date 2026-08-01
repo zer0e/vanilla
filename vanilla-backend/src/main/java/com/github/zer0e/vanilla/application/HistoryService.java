@@ -8,5 +8,5 @@ public interface HistoryService {
 
     OperationHistoryDo createHistory(CreateHistoryDto createHistoryDto);
 
-    PageData<OperationHistoryDo> getHistoryByStackIdOrderByCreateTimeDesc(Integer stackId);
+    PageData<OperationHistoryDo> getHistoryByStackId(Integer stackId, Integer page, Integer size);
 }
