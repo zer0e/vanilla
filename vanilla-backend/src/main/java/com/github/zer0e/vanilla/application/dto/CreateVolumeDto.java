@@ -14,6 +14,9 @@ public class CreateVolumeDto {
     @NotNull(message = "栈id不能为空")
     private Integer stackId;
 
+    @NotNull(message = "服务id不能为空")
+    private Integer serviceId;
+
     @NotEmpty(message = "卷名称不能为空")
     private String volumeName;
 
@@ -21,4 +24,7 @@ public class CreateVolumeDto {
      * 卷大小 单位GB
      */
     private Integer size;
+
+    @NotEmpty(message = "挂载路径不能为空")
+    private String mountPath;
 }

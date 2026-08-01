@@ -85,13 +85,15 @@ create table vanilla.t_port
     unique key uk_service_port (service_id, port)
 ) comment '端口表';
 
--- 卷
+-- 卷（service 级，部署时挂载到容器）
 create table vanilla.t_volume
 (
     id          int auto_increment primary key,
     stack_id    int          not null,
+    service_id  int          not null comment '所属服务',
     volume_name varchar(255) not null comment '卷名称',
     size        int          null comment '卷大小 GB',
+    mount_path  varchar(255) null comment '容器内挂载路径',
     create_user varchar(255) null,
     create_time datetime     null,
     modify_time datetime     null,
@@ -99,7 +101,7 @@ create table vanilla.t_volume
     delete_time datetime     null,
     delete_user varchar(255) null,
     status      tinyint      not null default 0,
-    unique key uk_stack_volume (stack_id, volume_name)
+    unique key uk_service_volume (service_id, volume_name)
 ) comment '卷表';
 
 -- 用户

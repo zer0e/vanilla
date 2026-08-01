@@ -22,6 +22,11 @@ public class VolumeDo extends Base {
     private Integer stackId;
 
     /**
+     * 所属服务
+     */
+    private Integer serviceId;
+
+    /**
      * 卷名称 一旦创建不允许修改
      */
     private String volumeName;
@@ -30,4 +35,9 @@ public class VolumeDo extends Base {
      * 卷大小 单位GB
      */
     private Integer size;
+
+    /**
+     * 容器内挂载路径
+     */
+    private String mountPath;
 }

@@ -20,4 +20,9 @@ public class UpdateVolumeDto {
      * 卷大小 单位GB
      */
     private Integer size;
+
+    /**
+     * 容器内挂载路径
+     */
+    private String mountPath;
 }

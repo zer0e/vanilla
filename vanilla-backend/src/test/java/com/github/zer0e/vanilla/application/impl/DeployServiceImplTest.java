@@ -7,10 +7,12 @@ import com.github.dockerjava.api.command.ListContainersCmd;
 import com.github.dockerjava.api.command.PullImageCmd;
 import com.github.dockerjava.api.command.RemoveContainerCmd;
 import com.github.dockerjava.api.command.StartContainerCmd;
+import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.Ports;
+import com.github.dockerjava.api.model.Volume;
 import com.github.zer0e.vanilla.application.HistoryService;
 import com.github.zer0e.vanilla.application.dto.DeployStackDto;
 import com.github.zer0e.vanilla.application.vo.ServiceStatusVo;
@@ -19,9 +21,11 @@ import com.github.zer0e.vanilla.domain.DataStatus;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.PortMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.StackMapper;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.VolumeMapper;
 import com.github.zer0e.vanilla.infrastructure.db.repository.PortDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.ServiceDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.StackDo;
+import com.github.zer0e.vanilla.infrastructure.db.repository.VolumeDo;
 import com.github.zer0e.vanilla.infrastructure.docker.DockerClientFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -65,6 +69,8 @@ class DeployServiceImplTest {
     @Mock
     private PortMapper portMapper;
     @Mock
+    private VolumeMapper volumeMapper;
+    @Mock
     private HistoryService historyService;
     @Mock
     private DockerClient dockerClient;
@@ -74,7 +80,7 @@ class DeployServiceImplTest {
     @BeforeEach
     void setUp() {
         deployService = new DeployServiceImpl(
-                dockerClientFactory, stackMapper, serviceMapper, portMapper, historyService);
+                dockerClientFactory, stackMapper, serviceMapper, portMapper, volumeMapper, historyService);
     }
 
     // ---- buildHostConfig：端口绑定必须存在于 HostConfig（修复被 withHostConfig 覆盖的缺陷） ----
@@ -120,6 +126,26 @@ class DeployServiceImplTest {
 
         assertThat(hc.getPortBindings()).isNull();
         assertThat(exposed).isEmpty();
+    }
+
+    // ---- buildVolumeBinds：卷挂载绑定 ----
+
+    @Test
+    void buildVolumeBinds_mapsDockerVolumeToContainerPath() {
+        VolumeDo data = VolumeDo.builder().stackId(1).serviceId(1).volumeName("data").mountPath("/data").build();
+
+        List<Bind> binds = deployService.buildVolumeBinds(1, 1, List.of(data));
+
+        assertThat(binds).hasSize(1);
+        // Docker named volume = vanilla-{stackId}-{serviceId}-{volumeName}
+        assertThat(binds.get(0).getPath()).isEqualTo("vanilla-1-1-data");
+        // 容器内挂载路径
+        assertThat(binds.get(0).getVolume().getPath()).isEqualTo("/data");
+    }
+
+    @Test
+    void buildVolumeBinds_empty_returnsEmpty() {
+        assertThat(deployService.buildVolumeBinds(1, 1, Collections.emptyList())).isEmpty();
     }
 
     // ---- validateHostPorts：跨服务/副本宿主端口冲突预校验 ----
@@ -231,7 +257,8 @@ class DeployServiceImplTest {
                 container("old0", "/vanilla-1-nginx-0"),
                 container("old1", "/vanilla-1-nginx-1"));
 
-        deployService.recreateService(dockerClient, stack(), service, List.of(port("tcp", 80)), 2, existing);
+        deployService.recreateService(dockerClient, stack(), service, List.of(port("tcp", 80)),
+                Collections.emptyList(), 2, existing);
 
         verify(dockerClient).removeContainerCmd("old0");
         verify(dockerClient).removeContainerCmd("old1");
@@ -249,7 +276,8 @@ class DeployServiceImplTest {
                 container("old0", "/vanilla-1-nginx-0"),
                 container("old1", "/vanilla-1-nginx-1"));
 
-        deployService.rollingUpdateService(dockerClient, stack(), service, List.of(port("tcp", 80)), 2, existing);
+        deployService.rollingUpdateService(dockerClient, stack(), service, List.of(port("tcp", 80)),
+                Collections.emptyList(), 2, existing);
 
         InOrder inOrder = inOrder(dockerClient);
         // 逐副本：停旧副本0 → 建新副本0 → 停旧副本1 → 建新副本1（其余副本持续服务）
@@ -267,7 +295,8 @@ class DeployServiceImplTest {
                 container("old0", "/vanilla-1-nginx-0"),
                 container("old1", "/vanilla-1-nginx-1"));
 
-        deployService.rollingUpdateService(dockerClient, stack(), service, List.of(port("tcp", 80)), 1, existing);
+        deployService.rollingUpdateService(dockerClient, stack(), service, List.of(port("tcp", 80)),
+                Collections.emptyList(), 1, existing);
 
         // 副本数变化退化为全量重建：删掉全部旧容器，创建 1 个新容器
         verify(dockerClient).removeContainerCmd("old0");

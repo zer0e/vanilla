@@ -9,7 +9,9 @@ import java.util.List;
 
 @Mapper
 public interface VolumeMapper extends BaseMapper<VolumeDo> {
-    VolumeDo selectByStackIdAndName(@Param("stackId") Integer stackId, @Param("volumeName") String volumeName);
+    VolumeDo selectByServiceIdAndName(@Param("serviceId") Integer serviceId, @Param("volumeName") String volumeName);
 
-    List<VolumeDo> selectVolumesByStackIdAndSearch(@Param("stackId") Integer stackId, @Param("search") String search);
+    List<VolumeDo> selectVolumesByServiceIdAndSearch(@Param("serviceId") Integer serviceId, @Param("search") String search);
+
+    List<VolumeDo> selectVolumesByServiceIds(@Param("serviceIds") List<Integer> serviceIds);
 }

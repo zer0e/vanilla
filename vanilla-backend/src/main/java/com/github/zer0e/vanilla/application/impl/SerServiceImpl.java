@@ -139,11 +139,12 @@ public class SerServiceImpl implements SerService {
         List<PortDo> portDos = portMapper.selectPortsByServiceIds(serviceIds);
         Map<Integer, List<Port>> portMap = portDos.stream().collect(Collectors.groupingBy(PortDo::getServiceId,
                 Collectors.mapping(SerServiceImpl::toPort, Collectors.toList())));
-        List<Volume> volumes = volumeMapper.selectVolumesByStackIdAndSearch(stackId, null)
-                .stream().map(SerServiceImpl::toVolume).toList();
+        List<VolumeDo> volumeDos = volumeMapper.selectVolumesByServiceIds(serviceIds);
+        Map<Integer, List<Volume>> volumeMap = volumeDos.stream().collect(Collectors.groupingBy(VolumeDo::getServiceId,
+                Collectors.mapping(SerServiceImpl::toVolume, Collectors.toList())));
         for (ServiceVo serviceVo : serviceVos) {
             serviceVo.setPorts(portMap.getOrDefault(serviceVo.getId(), Collections.emptyList()));
-            serviceVo.setVolumes(volumes);
+            serviceVo.setVolumes(volumeMap.getOrDefault(serviceVo.getId(), Collections.emptyList()));
         }
     }
 
@@ -161,8 +162,10 @@ public class SerServiceImpl implements SerService {
         Volume volume = new Volume();
         volume.setId(volumeDo.getId());
         volume.setStackId(volumeDo.getStackId());
+        volume.setServiceId(volumeDo.getServiceId());
         volume.setVolumeName(volumeDo.getVolumeName());
         volume.setSize(volumeDo.getSize());
+        volume.setMountPath(volumeDo.getMountPath());
         return volume;
     }
 

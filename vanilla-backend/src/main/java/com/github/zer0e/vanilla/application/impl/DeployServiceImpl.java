@@ -3,10 +3,13 @@ package com.github.zer0e.vanilla.application.impl;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.exception.NotFoundException;
+import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.Ports;
+import com.github.dockerjava.api.model.Volume;
 import com.github.zer0e.vanilla.application.DeployService;
 import com.github.zer0e.vanilla.application.HistoryService;
 import com.github.zer0e.vanilla.application.dto.CreateHistoryDto;
@@ -20,9 +23,11 @@ import com.github.zer0e.vanilla.domain.Env;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.PortMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.StackMapper;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.VolumeMapper;
 import com.github.zer0e.vanilla.infrastructure.db.repository.PortDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.ServiceDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.StackDo;
+import com.github.zer0e.vanilla.infrastructure.db.repository.VolumeDo;
 import com.github.zer0e.vanilla.infrastructure.docker.DockerClientFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +53,7 @@ public class DeployServiceImpl implements DeployService {
     private final StackMapper stackMapper;
     private final ServiceMapper serviceMapper;
     private final PortMapper portMapper;
+    private final VolumeMapper volumeMapper;
     private final HistoryService historyService;
 
     @Override
@@ -161,12 +167,14 @@ public class DeployServiceImpl implements DeployService {
         try {
             pullImage(client, service.getImage());
             List<PortDo> ports = portMapper.selectPortsByServiceId(service.getId());
+            List<VolumeDo> volumes = volumeMapper.selectVolumesByServiceIdAndSearch(service.getId(), null);
+            ensureDockerVolumes(client, stack.getId(), service.getId(), volumes);
             int replicas = service.getReplicas() == null ? 1 : Math.max(1, service.getReplicas());
             List<Container> existing = listServiceContainers(client, stack.getId(), service.getId());
             if (isRollingUpdate(service)) {
-                rollingUpdateService(client, stack, service, ports, replicas, existing);
+                rollingUpdateService(client, stack, service, ports, volumes, replicas, existing);
             } else {
-                recreateService(client, stack, service, ports, replicas, existing);
+                recreateService(client, stack, service, ports, volumes, replicas, existing);
             }
         } catch (BusinessException e) {
             throw e;
@@ -174,6 +182,52 @@ public class DeployServiceImpl implements DeployService {
             log.error("deploy service err, stackId={}, service={}", stack.getId(), service.getServiceName(), e);
             throw new BusinessException(Constants.DEPLOY_FAIL + "：" + service.getServiceName() + " " + e.getMessage());
         }
+    }
+
+    /**
+     * 确保服务的 Docker named volume 存在（部署前幂等创建）
+     */
+    private void ensureDockerVolumes(DockerClient client, Integer stackId, Integer serviceId, List<VolumeDo> volumes) {
+        if (CollectionUtils.isEmpty(volumes)) {
+            return;
+        }
+        for (VolumeDo volume : volumes) {
+            String name = dockerVolumeName(stackId, serviceId, volume);
+            boolean exists;
+            try {
+                client.inspectVolumeCmd(name).exec();
+                exists = true;
+            } catch (NotFoundException e) {
+                exists = false;
+            }
+            if (!exists) {
+                try {
+                    client.createVolumeCmd().withName(name)
+                            .withDriverOpts(Map.of("size", String.valueOf(volume.getSize())))
+                            .exec();
+                } catch (Exception e) {
+                    log.warn("create volume with size opt err, name={}, retry without opts", name, e);
+                    client.createVolumeCmd().withName(name).exec();
+                }
+            }
+        }
+    }
+
+    /**
+     * 构建卷挂载绑定（Docker named volume → 容器挂载路径）
+     */
+    List<Bind> buildVolumeBinds(Integer stackId, Integer serviceId, List<VolumeDo> volumes) {
+        if (CollectionUtils.isEmpty(volumes)) {
+            return Collections.emptyList();
+        }
+        return volumes.stream()
+                .map(v -> new Bind(dockerVolumeName(stackId, serviceId, v), new Volume(v.getMountPath())))
+                .toList();
+    }
+
+    private String dockerVolumeName(Integer stackId, Integer serviceId, VolumeDo volume) {
+        return sanitizeContainerName(Constants.CONTAINER_NAME_PREFIX + stackId + "-" + serviceId
+                + "-" + volume.getVolumeName());
     }
 
     private boolean isRollingUpdate(ServiceDo service) {
@@ -184,12 +238,12 @@ public class DeployServiceImpl implements DeployService {
      * Recreate（默认）：先删该服务旧容器，再按副本数全量创建
      */
     void recreateService(DockerClient client, StackDo stack, ServiceDo service, List<PortDo> ports,
-                         int replicas, List<Container> existing) {
+                         List<VolumeDo> volumes, int replicas, List<Container> existing) {
         for (Container container : existing) {
             removeContainer(client, container.getId());
         }
         for (int i = 0; i < replicas; i++) {
-            startReplica(client, stack, service, ports, i, replicas);
+            startReplica(client, stack, service, ports, volumes, i, replicas);
         }
     }
 
@@ -198,9 +252,9 @@ public class DeployServiceImpl implements DeployService {
      * 副本数变化（扩容/缩容）时命名与宿主端口会错位，退化为全量重建
      */
     void rollingUpdateService(DockerClient client, StackDo stack, ServiceDo service, List<PortDo> ports,
-                              int replicas, List<Container> existing) {
+                              List<VolumeDo> volumes, int replicas, List<Container> existing) {
         if (existing.size() != replicas) {
-            recreateService(client, stack, service, ports, replicas, existing);
+            recreateService(client, stack, service, ports, volumes, replicas, existing);
             return;
         }
         for (int i = 0; i < replicas; i++) {
@@ -210,15 +264,15 @@ public class DeployServiceImpl implements DeployService {
             if (old != null) {
                 removeContainer(client, old.getId());
             }
-            startReplica(client, stack, service, ports, i, replicas);
+            startReplica(client, stack, service, ports, volumes, i, replicas);
         }
     }
 
     private void startReplica(DockerClient client, StackDo stack, ServiceDo service, List<PortDo> ports,
-                              int i, int replicas) {
+                              List<VolumeDo> volumes, int i, int replicas) {
         Integer index = replicas > 1 ? i : null;
         String name = containerName(stack.getId(), service.getServiceName(), index);
-        CreateContainerResponse response = createContainer(client, stack, service, ports, name, index);
+        CreateContainerResponse response = createContainer(client, stack, service, ports, volumes, name, index);
         client.startContainerCmd(response.getId()).exec();
     }
 
@@ -268,7 +322,8 @@ public class DeployServiceImpl implements DeployService {
     }
 
     private CreateContainerResponse createContainer(DockerClient client, StackDo stack, ServiceDo service,
-                                                    List<PortDo> ports, String containerName, Integer replicaIndex) {
+                                                    List<PortDo> ports, List<VolumeDo> volumes,
+                                                    String containerName, Integer replicaIndex) {
         CreateContainerCmd cmd = client.createContainerCmd(service.getImage())
                 .withName(containerName)
                 .withLabels(buildLabels(stack.getId(), service));
@@ -278,10 +333,14 @@ public class DeployServiceImpl implements DeployService {
         }
         buildCommand(cmd, service);
 
-        // 端口映射和资源限制需放入同一个 HostConfig，否则 withHostConfig 会覆盖 withPortBindings 的结果。
+        // 端口映射、卷挂载、资源限制需放入同一个 HostConfig，否则 withHostConfig 会覆盖前面的结果。
         // 多副本时宿主端口按副本索引递增偏移，避免端口冲突
         List<ExposedPort> exposedPorts = new ArrayList<>();
         HostConfig hostConfig = buildHostConfig(service, ports, replicaIndex, exposedPorts);
+        List<Bind> binds = buildVolumeBinds(stack.getId(), service.getId(), volumes);
+        if (!CollectionUtils.isEmpty(binds)) {
+            hostConfig.withBinds(binds);
+        }
         if (!exposedPorts.isEmpty()) {
             cmd.withExposedPorts(exposedPorts);
         }
