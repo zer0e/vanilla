@@ -148,8 +148,11 @@ public class DeployServiceImpl implements DeployService {
                                                     List<PortDo> ports, String containerName, Integer replicaIndex) {
         CreateContainerCmd cmd = client.createContainerCmd(service.getImage())
                 .withName(containerName)
-                .withEnv(buildEnvs(service.getEnvs()))
                 .withLabels(buildLabels(stack.getId(), service));
+        List<String> env = buildEnvs(service.getEnvs());
+        if (!CollectionUtils.isEmpty(env)) {
+            cmd.withEnv(env);
+        }
         buildCommand(cmd, service);
 
         // 端口映射和资源限制需放入同一个 HostConfig，否则 withHostConfig 会覆盖 withPortBindings 的结果。
