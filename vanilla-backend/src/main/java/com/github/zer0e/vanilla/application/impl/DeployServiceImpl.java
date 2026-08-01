@@ -131,8 +131,9 @@ public class DeployServiceImpl implements DeployService {
             List<PortDo> ports = portMapper.selectPortsByServiceId(service.getId());
             int replicas = service.getReplicas() == null ? 1 : Math.max(1, service.getReplicas());
             for (int i = 0; i < replicas; i++) {
-                String containerName = containerName(stack.getId(), service.getServiceName(), replicas > 1 ? i : null);
-                CreateContainerResponse response = createContainer(client, stack, service, ports, containerName);
+                Integer index = replicas > 1 ? i : null;
+                String containerName = containerName(stack.getId(), service.getServiceName(), index);
+                CreateContainerResponse response = createContainer(client, stack, service, ports, containerName, index);
                 client.startContainerCmd(response.getId()).exec();
             }
         } catch (BusinessException e) {
@@ -144,27 +145,29 @@ public class DeployServiceImpl implements DeployService {
     }
 
     private CreateContainerResponse createContainer(DockerClient client, StackDo stack, ServiceDo service,
-                                                    List<PortDo> ports, String containerName) {
+                                                    List<PortDo> ports, String containerName, Integer replicaIndex) {
         CreateContainerCmd cmd = client.createContainerCmd(service.getImage())
                 .withName(containerName)
                 .withEnv(buildEnvs(service.getEnvs()))
                 .withLabels(buildLabels(stack.getId(), service));
         buildCommand(cmd, service);
 
+        // 端口映射和资源限制需放入同一个 HostConfig，否则 withHostConfig 会覆盖 withPortBindings 的结果。
+        // 多副本时宿主端口按副本索引递增偏移，避免端口冲突
+        HostConfig hostConfig = HostConfig.newHostConfig();
         if (!CollectionUtils.isEmpty(ports)) {
             List<ExposedPort> exposedPortList = new ArrayList<>();
             Ports portBindings = new Ports();
+            int offset = replicaIndex == null ? 0 : replicaIndex;
             for (PortDo port : ports) {
                 ExposedPort exposedPort = "udp".equalsIgnoreCase(port.getProtocol())
                         ? ExposedPort.udp(port.getPort()) : ExposedPort.tcp(port.getPort());
                 exposedPortList.add(exposedPort);
-                portBindings.bind(exposedPort, Ports.Binding.bindPort(port.getPort()));
+                portBindings.bind(exposedPort, Ports.Binding.bindPort(port.getPort() + offset));
             }
             cmd.withExposedPorts(exposedPortList);
-            cmd.withPortBindings(portBindings);
+            hostConfig.withPortBindings(portBindings);
         }
-
-        HostConfig hostConfig = HostConfig.newHostConfig();
         if (service.getCpu() != null) {
             hostConfig.withCpuShares(service.getCpu());
         }
