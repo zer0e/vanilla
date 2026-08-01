@@ -133,7 +133,7 @@ public class DeployServiceImpl implements DeployService {
      * 校验整个栈的宿主端口分配：每个服务每个副本占用 port + index 宿主端口，
      * 跨服务/副本重复时在创建容器前快速失败，避免部分部署
      */
-    private void validateHostPorts(Integer stackId, List<ServiceDo> services) throws BusinessException {
+    void validateHostPorts(Integer stackId, List<ServiceDo> services) throws BusinessException {
         Map<Integer, String> allocated = new HashMap<>();
         for (ServiceDo service : services) {
             List<PortDo> ports = portMapper.selectPortsByServiceId(service.getId());
@@ -187,18 +187,32 @@ public class DeployServiceImpl implements DeployService {
 
         // 端口映射和资源限制需放入同一个 HostConfig，否则 withHostConfig 会覆盖 withPortBindings 的结果。
         // 多副本时宿主端口按副本索引递增偏移，避免端口冲突
+        List<ExposedPort> exposedPorts = new ArrayList<>();
+        HostConfig hostConfig = buildHostConfig(service, ports, replicaIndex, exposedPorts);
+        if (!exposedPorts.isEmpty()) {
+            cmd.withExposedPorts(exposedPorts);
+        }
+        cmd.withHostConfig(hostConfig);
+        return cmd.exec();
+    }
+
+    /**
+     * 构建容器 HostConfig：端口绑定（宿主端口 = 声明端口 + 副本索引）+ CPU/内存限制。
+     * 端口绑定与资源限制放在同一个 HostConfig，避免被 withHostConfig 覆盖
+     *
+     * @param exposedPorts 出参，收集需要暴露的容器端口
+     */
+    HostConfig buildHostConfig(ServiceDo service, List<PortDo> ports, Integer replicaIndex, List<ExposedPort> exposedPorts) {
         HostConfig hostConfig = HostConfig.newHostConfig();
         if (!CollectionUtils.isEmpty(ports)) {
-            List<ExposedPort> exposedPortList = new ArrayList<>();
             Ports portBindings = new Ports();
             int offset = replicaIndex == null ? 0 : replicaIndex;
             for (PortDo port : ports) {
                 ExposedPort exposedPort = "udp".equalsIgnoreCase(port.getProtocol())
                         ? ExposedPort.udp(port.getPort()) : ExposedPort.tcp(port.getPort());
-                exposedPortList.add(exposedPort);
+                exposedPorts.add(exposedPort);
                 portBindings.bind(exposedPort, Ports.Binding.bindPort(port.getPort() + offset));
             }
-            cmd.withExposedPorts(exposedPortList);
             hostConfig.withPortBindings(portBindings);
         }
         if (service.getCpu() != null) {
@@ -207,8 +221,7 @@ public class DeployServiceImpl implements DeployService {
         if (service.getMemory() != null) {
             hostConfig.withMemory(service.getMemory() * 1024L * 1024L);
         }
-        cmd.withHostConfig(hostConfig);
-        return cmd.exec();
+        return hostConfig;
     }
 
     private void buildCommand(CreateContainerCmd cmd, ServiceDo service) {
@@ -247,7 +260,7 @@ public class DeployServiceImpl implements DeployService {
         return labels;
     }
 
-    private String containerName(Integer stackId, String serviceName, Integer index) {
+    String containerName(Integer stackId, String serviceName, Integer index) {
         String name = Constants.CONTAINER_NAME_PREFIX + stackId + "-" + serviceName;
         if (index != null) {
             name += "-" + index;
@@ -276,7 +289,7 @@ public class DeployServiceImpl implements DeployService {
         }
     }
 
-    private String resolveStatus(int total, long running) {
+    String resolveStatus(int total, long running) {
         if (total == 0) {
             return "NONE";
         }
@@ -289,7 +302,7 @@ public class DeployServiceImpl implements DeployService {
         return "PARTIAL";
     }
 
-    private String resolveStackStatus(List<ServiceStatusVo> services) {
+    String resolveStackStatus(List<ServiceStatusVo> services) {
         if (services.isEmpty() || services.stream().allMatch(s -> "NONE".equals(s.getStatus()))) {
             return "NONE";
         }
