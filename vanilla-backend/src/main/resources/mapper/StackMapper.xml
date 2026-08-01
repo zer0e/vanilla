@@ -4,6 +4,7 @@
 
     <select id="selectByClusterIdAndName"
             resultType="com.github.zer0e.vanilla.infrastructure.db.repository.StackDo">
+        <!-- 重名检查：需包含已软删除的行，因为 uk_cluster_stack 唯一索引永久占用栈名 -->
         select * from t_stack
         <where>
             cluster_id = #{clusterId} and
@@ -28,6 +29,7 @@
             <if test="clusterId != null">
                 AND t.cluster_id = #{clusterId}
             </if>
+            AND t.status = 0
         </where>
     </select>
 </mapper>
