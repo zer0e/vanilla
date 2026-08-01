@@ -15,21 +15,31 @@ import com.github.zer0e.vanilla.common.PageData;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
 import com.github.zer0e.vanilla.common.util.SecurityUtil;
 import com.github.zer0e.vanilla.domain.DataStatus;
+import com.github.zer0e.vanilla.domain.Port;
+import com.github.zer0e.vanilla.domain.Volume;
 import com.github.zer0e.vanilla.infrastructure.converter.ServiceConverter;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.PortMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.StackMapper;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.VolumeMapper;
+import com.github.zer0e.vanilla.infrastructure.db.repository.PortDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.ServiceDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.StackDo;
+import com.github.zer0e.vanilla.infrastructure.db.repository.VolumeDo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.CollectionUtils;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 @RequiredArgsConstructor
 @Slf4j
@@ -38,6 +48,8 @@ public class SerServiceImpl implements SerService {
 
     private final ServiceMapper serviceMapper;
     private final StackMapper stackMapper;
+    private final PortMapper portMapper;
+    private final VolumeMapper volumeMapper;
     private final HistoryService historyService;
 
     @Override
@@ -111,8 +123,47 @@ public class SerServiceImpl implements SerService {
         PageHelper.startPage(page, size);
         List<ServiceDo> serviceDos = serviceMapper.selectServicesByStackIdAndSearch(stackId, search);
         List<ServiceVo> serviceVos = serviceDos.stream().map(ServiceConverter.INSTANCE::toVo).toList();
+        fillPortsAndVolumes(stackId, serviceVos);
         PageInfo<ServiceDo> pageInfo = new PageInfo<>(serviceDos);
         return new PageData<>(page, size, pageInfo.getTotal(), serviceVos);
+    }
+
+    /**
+     * 为服务列表填充关联的端口和卷
+     */
+    private void fillPortsAndVolumes(Integer stackId, List<ServiceVo> serviceVos) {
+        if (CollectionUtils.isEmpty(serviceVos)) {
+            return;
+        }
+        List<Integer> serviceIds = serviceVos.stream().map(ServiceVo::getId).toList();
+        List<PortDo> portDos = portMapper.selectPortsByServiceIds(serviceIds);
+        Map<Integer, List<Port>> portMap = portDos.stream().collect(Collectors.groupingBy(PortDo::getServiceId,
+                Collectors.mapping(SerServiceImpl::toPort, Collectors.toList())));
+        List<Volume> volumes = volumeMapper.selectVolumesByStackIdAndSearch(stackId, null)
+                .stream().map(SerServiceImpl::toVolume).toList();
+        for (ServiceVo serviceVo : serviceVos) {
+            serviceVo.setPorts(portMap.getOrDefault(serviceVo.getId(), Collections.emptyList()));
+            serviceVo.setVolumes(volumes);
+        }
+    }
+
+    private static Port toPort(PortDo portDo) {
+        Port port = new Port();
+        port.setId(portDo.getId());
+        port.setStackId(portDo.getStackId());
+        port.setProtocol(portDo.getProtocol());
+        port.setPort(portDo.getPort());
+        port.setServiceId(portDo.getServiceId());
+        return port;
+    }
+
+    private static Volume toVolume(VolumeDo volumeDo) {
+        Volume volume = new Volume();
+        volume.setId(volumeDo.getId());
+        volume.setStackId(volumeDo.getStackId());
+        volume.setVolumeName(volumeDo.getVolumeName());
+        volume.setSize(volumeDo.getSize());
+        return volume;
     }
 
     private void recordHistory(Integer stackId, String event) {

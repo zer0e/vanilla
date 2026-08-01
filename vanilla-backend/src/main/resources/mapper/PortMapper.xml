@@ -19,4 +19,22 @@
             and status = 0
         </where>
     </select>
+    <select id="selectPortsByServiceIds"
+            resultType="com.github.zer0e.vanilla.infrastructure.db.repository.PortDo">
+        select * from t_port
+        <where>
+            <choose>
+                <when test="serviceIds != null and serviceIds.size > 0">
+                    service_id in
+                    <foreach collection="serviceIds" item="item" separator="," open="(" close=")">
+                        #{item}
+                    </foreach>
+                </when>
+                <otherwise>
+                    1 = 0
+                </otherwise>
+            </choose>
+            and status = 0
+        </where>
+    </select>
 </mapper>
