@@ -8,6 +8,8 @@ public class UpdateStackDto {
     @NotNull(message = "栈id不能为空")
     private Integer id;
 
+    private String stackName;
+
     private String description;
 
 }

@@ -30,9 +30,11 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 
 @RequiredArgsConstructor
 @Slf4j
@@ -102,6 +104,14 @@ public class StackServiceImpl implements StackService {
         StackDo stackDo = stackMapper.selectById(id);
         if (stackDo == null || stackDo.getStatus() != DataStatus.EXIST.ordinal()) {
             throw new BusinessException(Constants.STACK_NOT_EXIST);
+        }
+        // 改名时校验同集群下不与其他存活栈重名
+        if (StringUtils.hasText(updateStackDto.getStackName())
+                && !Objects.equals(updateStackDto.getStackName(), stackDo.getStackName())) {
+            StackDo repeat = stackMapper.selectByClusterIdAndName(stackDo.getClusterId(), updateStackDto.getStackName());
+            if (repeat != null) {
+                throw new BusinessException(Constants.STACK_DUPLICATE);
+            }
         }
         BeanUtils.copyProperties(updateStackDto, stackDo);
         stackDo.setModifyTime(LocalDateTime.now());
