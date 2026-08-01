@@ -13,6 +13,8 @@ public interface Constants {
     String UNDER_LINE = "_";
     String STACK_DUPLICATE = "栈名重复";
     String STACK_NOT_EXIST = "栈不存在";
+    String SERVICE_DUPLICATE = "服务名重复";
+    String SERVICE_NOT_EXIST = "服务不存在";
 
     int NUM_24 = 24;
     int NUM_60 = 60;

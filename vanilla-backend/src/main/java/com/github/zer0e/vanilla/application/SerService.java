@@ -1,6 +1,7 @@
 package com.github.zer0e.vanilla.application;
 
 import com.github.zer0e.vanilla.application.dto.CreateServiceDto;
+import com.github.zer0e.vanilla.application.dto.DeleteServiceDto;
 import com.github.zer0e.vanilla.application.dto.GetServicesDto;
 import com.github.zer0e.vanilla.application.dto.UpdateServiceDto;
 import com.github.zer0e.vanilla.application.vo.ServiceVo;
@@ -14,7 +15,7 @@ public interface SerService {
 
     ServiceVo updateService(UpdateServiceDto updateServiceDto) throws BusinessException;
 
-    void deleteService(Integer serviceId) throws BusinessException;
+    void deleteService(DeleteServiceDto deleteServiceDto) throws BusinessException;
 
     PageData<ServiceVo> getServices(GetServicesDto getServicesDto) throws BusinessException;
 

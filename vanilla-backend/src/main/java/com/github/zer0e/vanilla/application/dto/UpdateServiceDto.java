@@ -16,6 +16,9 @@ public class UpdateServiceDto {
     @NotNull(message = "服务id不能为空")
     private Integer id;
 
+    @NotNull(message = "栈id不能为空")
+    private Integer stackId;
+
     /**
      * 镜像
      */

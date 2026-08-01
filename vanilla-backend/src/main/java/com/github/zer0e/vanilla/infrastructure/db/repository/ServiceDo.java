@@ -8,16 +8,19 @@ import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.github.zer0e.vanilla.domain.Env;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
 
 import java.util.List;
+
+@EqualsAndHashCode(callSuper = true)
 @Data
 @SuperBuilder
 @NoArgsConstructor
 @AllArgsConstructor
-@TableName("t_service")
-public class ServiceDo {
+@TableName(value = "t_service", autoResultMap = true)
+public class ServiceDo extends Base {
     @TableId(type = IdType.AUTO)
     private Integer id;
 

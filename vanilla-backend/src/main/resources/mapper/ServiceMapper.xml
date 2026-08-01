@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper">
+
+    <resultMap id="ServiceDoResultMap" type="com.github.zer0e.vanilla.infrastructure.db.repository.ServiceDo">
+        <result column="envs" property="envs" typeHandler="com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler"/>
+    </resultMap>
+
+    <select id="selectByStackIdAndName" resultMap="ServiceDoResultMap">
+        select * from t_service
+        <where>
+            stack_id = #{stackId}
+            and service_name = #{serviceName}
+            and status = 0
+        </where>
+    </select>
+    <select id="selectServicesByStackIdAndSearch" resultMap="ServiceDoResultMap">
+        select * from t_service
+        <where>
+            stack_id = #{stackId}
+            <if test="search != null and search != ''">
+                and service_name like concat('%', #{search}, '%')
+            </if>
+            and status = 0
+        </where>
+    </select>
+</mapper>
