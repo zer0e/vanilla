@@ -36,6 +36,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -54,13 +55,14 @@ public class DeployServiceImpl implements DeployService {
     public StackStatusVo deployStack(DeployStackDto deployStackDto) throws BusinessException {
         StackDo stack = getStack(deployStackDto.getStackId());
         DockerClient client = dockerClientFactory.getClient(stack.getClusterId());
-        removeStackContainers(client, stack.getId());
         List<ServiceDo> services = serviceMapper.selectServicesByStackIdAndSearch(stack.getId(), null);
         validateHostPorts(stack.getId(), services);
         try {
             for (ServiceDo service : services) {
                 deployService(client, stack, service);
             }
+            // 清理已不存在的服务残留容器（如服务被删除后重新部署）
+            removeOrphanContainers(client, stack.getId(), services);
         } catch (BusinessException e) {
             // 部署失败时清理已创建容器，避免残留部分状态
             removeStackContainers(client, stack.getId());
@@ -153,24 +155,115 @@ public class DeployServiceImpl implements DeployService {
     }
 
     /**
-     * 部署单个服务，按副本数创建并启动容器
+     * 部署单个服务：拉取镜像后按更新策略创建/替换容器
      */
     private void deployService(DockerClient client, StackDo stack, ServiceDo service) throws BusinessException {
         try {
             pullImage(client, service.getImage());
             List<PortDo> ports = portMapper.selectPortsByServiceId(service.getId());
             int replicas = service.getReplicas() == null ? 1 : Math.max(1, service.getReplicas());
-            for (int i = 0; i < replicas; i++) {
-                Integer index = replicas > 1 ? i : null;
-                String containerName = containerName(stack.getId(), service.getServiceName(), index);
-                CreateContainerResponse response = createContainer(client, stack, service, ports, containerName, index);
-                client.startContainerCmd(response.getId()).exec();
+            List<Container> existing = listServiceContainers(client, stack.getId(), service.getId());
+            if (isRollingUpdate(service)) {
+                rollingUpdateService(client, stack, service, ports, replicas, existing);
+            } else {
+                recreateService(client, stack, service, ports, replicas, existing);
             }
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
             log.error("deploy service err, stackId={}, service={}", stack.getId(), service.getServiceName(), e);
             throw new BusinessException(Constants.DEPLOY_FAIL + "：" + service.getServiceName() + " " + e.getMessage());
+        }
+    }
+
+    private boolean isRollingUpdate(ServiceDo service) {
+        return "RollingUpdate".equalsIgnoreCase(service.getStrategy());
+    }
+
+    /**
+     * Recreate（默认）：先删该服务旧容器，再按副本数全量创建
+     */
+    void recreateService(DockerClient client, StackDo stack, ServiceDo service, List<PortDo> ports,
+                         int replicas, List<Container> existing) {
+        for (Container container : existing) {
+            removeContainer(client, container.getId());
+        }
+        for (int i = 0; i < replicas; i++) {
+            startReplica(client, stack, service, ports, i, replicas);
+        }
+    }
+
+    /**
+     * RollingUpdate：逐副本「停旧 → 建新」，其余副本持续对外服务。
+     * 副本数变化（扩容/缩容）时命名与宿主端口会错位，退化为全量重建
+     */
+    void rollingUpdateService(DockerClient client, StackDo stack, ServiceDo service, List<PortDo> ports,
+                              int replicas, List<Container> existing) {
+        if (existing.size() != replicas) {
+            recreateService(client, stack, service, ports, replicas, existing);
+            return;
+        }
+        for (int i = 0; i < replicas; i++) {
+            Integer index = replicas > 1 ? i : null;
+            String name = containerName(stack.getId(), service.getServiceName(), index);
+            Container old = findByContainerName(existing, name);
+            if (old != null) {
+                removeContainer(client, old.getId());
+            }
+            startReplica(client, stack, service, ports, i, replicas);
+        }
+    }
+
+    private void startReplica(DockerClient client, StackDo stack, ServiceDo service, List<PortDo> ports,
+                              int i, int replicas) {
+        Integer index = replicas > 1 ? i : null;
+        String name = containerName(stack.getId(), service.getServiceName(), index);
+        CreateContainerResponse response = createContainer(client, stack, service, ports, name, index);
+        client.startContainerCmd(response.getId()).exec();
+    }
+
+    /**
+     * 清理栈下不属于任何现存服务的容器（服务删除后的残留）
+     */
+    private void removeOrphanContainers(DockerClient client, Integer stackId, List<ServiceDo> services) {
+        Set<String> serviceIds = services.stream().map(s -> String.valueOf(s.getId())).collect(Collectors.toSet());
+        for (Container container : listStackContainers(client, stackId)) {
+            String serviceId = container.getLabels() == null
+                    ? null : container.getLabels().get(Constants.SERVICE_ID_LABEL);
+            if (serviceId == null || !serviceIds.contains(serviceId)) {
+                removeContainer(client, container.getId());
+            }
+        }
+    }
+
+    private List<Container> listServiceContainers(DockerClient client, Integer stackId, Integer serviceId) {
+        return client.listContainersCmd()
+                .withShowAll(true)
+                .withLabelFilter(Map.of(
+                        Constants.STACK_ID_LABEL, String.valueOf(stackId),
+                        Constants.SERVICE_ID_LABEL, String.valueOf(serviceId)))
+                .exec();
+    }
+
+    private Container findByContainerName(List<Container> containers, String name) {
+        for (Container container : containers) {
+            if (container.getNames() != null && container.getNames().length > 0
+                    && name.equalsIgnoreCase(stripSlash(container.getNames()[0]))) {
+                return container;
+            }
+        }
+        return null;
+    }
+
+    private String stripSlash(String name) {
+        return name != null && name.startsWith("/") ? name.substring(1) : name;
+    }
+
+    private void removeContainer(DockerClient client, String containerId) {
+        try {
+            client.removeContainerCmd(containerId).withForce(true).exec();
+        } catch (Exception e) {
+            log.warn("remove container err, containerId={}", containerId, e);
         }
     }
 

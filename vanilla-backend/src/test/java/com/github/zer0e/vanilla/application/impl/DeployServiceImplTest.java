@@ -1,8 +1,12 @@
 package com.github.zer0e.vanilla.application.impl;
 
 import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.command.CreateContainerCmd;
+import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.command.ListContainersCmd;
 import com.github.dockerjava.api.command.PullImageCmd;
+import com.github.dockerjava.api.command.RemoveContainerCmd;
+import com.github.dockerjava.api.command.StartContainerCmd;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.HostConfig;
@@ -22,6 +26,7 @@ import com.github.zer0e.vanilla.infrastructure.docker.DockerClientFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -33,10 +38,14 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -179,7 +188,6 @@ class DeployServiceImplTest {
     void deployStack_portCollision_failsBeforeAnyContainerCreated() throws Exception {
         when(stackMapper.selectById(1)).thenReturn(stack());
         when(dockerClientFactory.getClient(1)).thenReturn(dockerClient);
-        stubListContainers(Collections.emptyList());
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(1, "nginx", 3), service(2, "static", 1)));
         when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
@@ -197,8 +205,8 @@ class DeployServiceImplTest {
     void deployStack_midDeployFailure_rollsBackContainers() throws Exception {
         when(stackMapper.selectById(1)).thenReturn(stack());
         when(dockerClientFactory.getClient(1)).thenReturn(dockerClient);
-        // 初始清理无容器，部署中途失败后回滚时存在容器
-        stubListContainers(Collections.emptyList(), List.of(container("abc")));
+        // 回滚时清理同栈容器
+        stubListContainers(List.of(container("abc")));
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(1, "nginx", 1)));
         when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
@@ -211,6 +219,60 @@ class DeployServiceImplTest {
 
         // 失败后回滚清理了同栈容器
         verify(dockerClient).removeContainerCmd(anyString());
+    }
+
+    // ---- Recreate 策略：先删后建 ----
+
+    @Test
+    void recreateService_removesExistingThenCreatesAllReplicas() {
+        ServiceDo service = service(1, "nginx", 2);
+        stubCreateContainer("new0", "new1");
+        List<Container> existing = List.of(
+                container("old0", "/vanilla-1-nginx-0"),
+                container("old1", "/vanilla-1-nginx-1"));
+
+        deployService.recreateService(dockerClient, stack(), service, List.of(port("tcp", 80)), 2, existing);
+
+        verify(dockerClient).removeContainerCmd("old0");
+        verify(dockerClient).removeContainerCmd("old1");
+        verify(dockerClient, times(2)).createContainerCmd("nginx:latest");
+        verify(dockerClient, times(2)).startContainerCmd(anyString());
+    }
+
+    // ---- RollingUpdate 策略：逐副本替换 ----
+
+    @Test
+    void rollingUpdateService_replacesOneReplicaAtATime() {
+        ServiceDo service = service(1, "nginx", 2);
+        stubCreateContainer("new0", "new1");
+        List<Container> existing = List.of(
+                container("old0", "/vanilla-1-nginx-0"),
+                container("old1", "/vanilla-1-nginx-1"));
+
+        deployService.rollingUpdateService(dockerClient, stack(), service, List.of(port("tcp", 80)), 2, existing);
+
+        InOrder inOrder = inOrder(dockerClient);
+        // 逐副本：停旧副本0 → 建新副本0 → 停旧副本1 → 建新副本1（其余副本持续服务）
+        inOrder.verify(dockerClient).removeContainerCmd("old0");
+        inOrder.verify(dockerClient).createContainerCmd("nginx:latest");
+        inOrder.verify(dockerClient).removeContainerCmd("old1");
+        inOrder.verify(dockerClient).createContainerCmd("nginx:latest");
+    }
+
+    @Test
+    void rollingUpdateService_scaleChange_fallsBackToFullRecreate() {
+        ServiceDo service = service(1, "nginx", 1); // 目标 1 副本，现有 2 → 缩容
+        stubCreateContainer("new0");
+        List<Container> existing = List.of(
+                container("old0", "/vanilla-1-nginx-0"),
+                container("old1", "/vanilla-1-nginx-1"));
+
+        deployService.rollingUpdateService(dockerClient, stack(), service, List.of(port("tcp", 80)), 1, existing);
+
+        // 副本数变化退化为全量重建：删掉全部旧容器，创建 1 个新容器
+        verify(dockerClient).removeContainerCmd("old0");
+        verify(dockerClient).removeContainerCmd("old1");
+        verify(dockerClient).createContainerCmd("nginx:latest");
     }
 
     // ---- helpers ----
@@ -242,6 +304,42 @@ class DeployServiceImplTest {
         Container c = mock(Container.class);
         when(c.getId()).thenReturn(id);
         return c;
+    }
+
+    private Container container(String id, String name) {
+        Container c = container(id);
+        lenient().when(c.getNames()).thenReturn(new String[]{name});
+        return c;
+    }
+
+    /**
+     * stub docker 创建/启动/删除容器链路。ids 为每次 exec() 返回的容器 id（按调用顺序）
+     */
+    private void stubCreateContainer(String... ids) {
+        CreateContainerCmd cmd = mock(CreateContainerCmd.class);
+        lenient().when(dockerClient.createContainerCmd(anyString())).thenReturn(cmd);
+        lenient().when(cmd.withName(anyString())).thenReturn(cmd);
+        lenient().when(cmd.withLabels(anyMap())).thenReturn(cmd);
+        lenient().when(cmd.withEnv(anyList())).thenReturn(cmd);
+        lenient().when(cmd.withExposedPorts(anyList())).thenReturn(cmd);
+        lenient().when(cmd.withHostConfig(org.mockito.ArgumentMatchers.any(HostConfig.class))).thenReturn(cmd);
+        lenient().when(cmd.withCmd(org.mockito.ArgumentMatchers.any(String[].class))).thenReturn(cmd);
+        CreateContainerResponse[] responses = ids.length == 0
+                ? new CreateContainerResponse[]{response("created")}
+                : Arrays.stream(ids).map(this::response).toArray(CreateContainerResponse[]::new);
+        lenient().when(cmd.exec()).thenReturn(responses[0],
+                Arrays.copyOfRange(responses, 1, responses.length));
+        StartContainerCmd startCmd = mock(StartContainerCmd.class);
+        lenient().when(dockerClient.startContainerCmd(anyString())).thenReturn(startCmd);
+        RemoveContainerCmd removeCmd = mock(RemoveContainerCmd.class);
+        lenient().when(dockerClient.removeContainerCmd(anyString())).thenReturn(removeCmd);
+        lenient().when(removeCmd.withForce(true)).thenReturn(removeCmd);
+    }
+
+    private CreateContainerResponse response(String id) {
+        CreateContainerResponse resp = mock(CreateContainerResponse.class);
+        when(resp.getId()).thenReturn(id);
+        return resp;
     }
 
     private ServiceStatusVo serviceStatus(String status) {
