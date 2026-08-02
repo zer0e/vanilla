@@ -57,6 +57,11 @@ public class CreateServiceDto {
      */
     private List<Integer> volumeIds;
 
+    /**
+     * 声明服务需暴露的端口（协议+端口；SVC 类型在「端口/SVC」页按端口配置）
+     */
+    private List<PortSpecDto> ports;
+
     private List<Env> envs;
 
 }

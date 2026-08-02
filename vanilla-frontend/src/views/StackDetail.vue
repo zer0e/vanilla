@@ -144,6 +144,15 @@
         <!-- 端口 / SVC（每个端口对应一个 K8s Service，类型在端口上声明） -->
         <el-tab-pane label="端口/SVC" name="ports">
           <div class="toolbar">
+            <el-select
+              v-model="portFilterService"
+              placeholder="所有服务"
+              clearable
+              style="width: 200px"
+              @change="handlePortFilterChange"
+            >
+              <el-option v-for="svc in services" :key="svc.id" :label="svc.serviceName" :value="svc.id" />
+            </el-select>
             <el-input
               v-model="portSearch"
               placeholder="搜索端口号"
@@ -156,9 +165,7 @@
                 <el-button @click="handlePortSearch"><el-icon><Search /></el-icon></el-button>
               </template>
             </el-input>
-            <el-button type="primary" @click="openPortDialog()">
-              <el-icon><Plus /></el-icon>&nbsp;暴露端口
-            </el-button>
+            <span class="text-muted">端口在服务的「暴露端口」中声明，此处仅配置各端口的 SVC 类型</span>
           </div>
 
           <el-table v-loading="portsLoading" :data="ports" stripe>
@@ -379,6 +386,26 @@
             />
           </el-select>
         </el-form-item>
+        <el-form-item label="暴露端口">
+          <div class="port-spec-list">
+            <div v-for="(p, idx) in serviceForm.ports" :key="idx" class="port-spec-item">
+              <el-select v-model="p.protocol" style="width: 100px">
+                <el-option label="tcp" value="tcp" />
+                <el-option label="udp" value="udp" />
+              </el-select>
+              <el-input-number v-model="p.port" :min="1" :max="65535" placeholder="端口" style="width: 170px" />
+              <el-button type="danger" link @click="serviceForm.ports.splice(idx, 1)">
+                <el-icon><Delete /></el-icon>
+              </el-button>
+            </div>
+            <div class="port-spec-add">
+              <el-button size="small" type="primary" plain @click="addServicePort">
+                添加端口
+              </el-button>
+              <span class="text-muted">SVC 类型在「端口/SVC」页逐端口配置</span>
+            </div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="serviceDialogVisible = false">取消</el-button>
@@ -389,24 +416,19 @@
     <!-- 端口 / SVC 对话框 -->
     <el-dialog
       v-model="portDialogVisible"
-      :title="portForm.id ? '编辑端口' : '暴露端口'"
+      title="配置 SVC 类型"
       width="460px"
       destroy-on-close
     >
       <el-form ref="portFormRef" :model="portForm" :rules="portFormRules" label-width="90px">
         <el-form-item label="服务" prop="serviceId">
-          <el-select v-model="portForm.serviceId" :disabled="!!portForm.id" placeholder="选择要暴露的服务" style="width: 100%">
-            <el-option v-for="svc in services" :key="svc.id" :label="svc.serviceName" :value="svc.id" />
-          </el-select>
+          <el-input :model-value="portForm.serviceName || `#${portForm.serviceId}`" disabled />
         </el-form-item>
-        <el-form-item label="协议" prop="protocol">
-          <el-select v-model="portForm.protocol" style="width: 100%">
-            <el-option label="tcp" value="tcp" />
-            <el-option label="udp" value="udp" />
-          </el-select>
+        <el-form-item label="协议">
+          <el-input :model-value="portForm.protocol || 'tcp'" disabled />
         </el-form-item>
-        <el-form-item label="端口" prop="port">
-          <el-input-number v-model="portForm.port" :min="1" :max="65535" style="width: 100%" />
+        <el-form-item label="端口">
+          <el-input :model-value="String(portForm.port || '')" disabled />
         </el-form-item>
         <el-form-item label="SVC 类型">
           <el-select v-model="portForm.serviceType" style="width: 100%">
@@ -735,7 +757,8 @@ function defaultServiceForm() {
     healthCheckCmd: '',
     strategy: 'Recreate',
     envs: [],
-    volumeIds: []
+    volumeIds: [],
+    ports: []
   }
 }
 
@@ -756,7 +779,8 @@ const openServiceDialog = (row) => {
       healthCheckCmd: row.healthCheckCmd || '',
       strategy: row.strategy || 'Recreate',
       envs: (row.envs || []).map((e) => ({ ...e })),
-      volumeIds: (row.volumes || []).map((v) => v.id)
+      volumeIds: (row.volumes || []).map((v) => v.id),
+      ports: (row.ports || []).map((p) => ({ protocol: p.protocol || 'tcp', port: p.port }))
     }
   } else {
     serviceForm.value = defaultServiceForm()
@@ -779,7 +803,10 @@ const saveService = () => {
     try {
       const payload = {
         ...serviceForm.value,
-        envs: serviceForm.value.envs.filter((e) => e.name || e.value)
+        envs: serviceForm.value.envs.filter((e) => e.name || e.value),
+        ports: serviceForm.value.ports
+          .filter((p) => p.port)
+          .map((p) => ({ protocol: p.protocol || 'tcp', port: p.port }))
       }
       if (payload.id) {
         // 更新服务：image 必填，serviceName 不可修改（后端 UpdateServiceDto 无该字段）
@@ -850,17 +877,33 @@ const loadPorts = async () => {
   try {
     const res = await getPorts({
       stackId,
+      serviceId: portFilterService.value || undefined,
       page: portPage.value,
       size: portSize.value,
       search: portSearch.value || undefined
     })
     ports.value = res?.data || []
     portCount.value = res?.count || 0
+    // 按服务列表回填服务名（按服务过滤时后端不返回 serviceName）
+    for (const p of ports.value) {
+      const svc = services.value.find((x) => x.id === p.serviceId)
+      if (svc) p.serviceName = svc.serviceName
+    }
   } catch (e) {
     // 拦截器已提示
   } finally {
     portsLoading.value = false
   }
+}
+
+const addServicePort = () => {
+  serviceForm.value.ports.push({ protocol: 'tcp', port: undefined })
+}
+
+const portFilterService = ref(null)
+const handlePortFilterChange = () => {
+  portPage.value = 1
+  loadPorts()
 }
 
 const handlePortSearch = () => {
@@ -874,17 +917,15 @@ const handlePortSizeChange = () => {
 }
 
 const openPortDialog = (port) => {
-  if (port) {
-    portForm.value = {
-      id: port.id,
-      stackId,
-      serviceId: port.serviceId,
-      protocol: port.protocol || 'tcp',
-      port: port.port,
-      serviceType: port.serviceType || ''
-    }
-  } else {
-    portForm.value = defaultPortForm()
+  if (!port) return
+  portForm.value = {
+    id: port.id,
+    stackId,
+    serviceId: port.serviceId,
+    serviceName: port.serviceName,
+    protocol: port.protocol || 'tcp',
+    port: port.port,
+    serviceType: port.serviceType || ''
   }
   portDialogVisible.value = true
 }
@@ -1138,6 +1179,20 @@ onMounted(() => {
 
 .env-list .env-add {
   margin-top: 4px;
+}
+
+.port-spec-list .port-spec-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.port-spec-list .port-spec-add {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .log-toolbar {

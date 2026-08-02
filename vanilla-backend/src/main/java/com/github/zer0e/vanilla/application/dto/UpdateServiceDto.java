@@ -58,5 +58,10 @@ public class UpdateServiceDto {
      */
     private List<Integer> volumeIds;
 
+    /**
+     * 声明的端口列表；null 表示不修改端口（新增/移除端口在保存时合并同步）
+     */
+    private List<PortSpecDto> ports;
+
     private List<Env> envs;
 }
