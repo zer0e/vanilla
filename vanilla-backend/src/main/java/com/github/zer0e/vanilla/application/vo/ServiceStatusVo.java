@@ -2,6 +2,8 @@ package com.github.zer0e.vanilla.application.vo;
 
 import lombok.Data;
 
+import java.util.List;
+
 /**
  * 服务运行状态
  */
@@ -23,4 +25,9 @@ public class ServiceStatusVo {
     private Integer healthyCount;
 
     private Integer replicas;
+
+    /**
+     * 暴露地址列表（如 NodePort "nodeIP:30080" / LoadBalancer "1.2.3.4:80" / Docker "0.0.0.0:8080"），未部署为空
+     */
+    private List<String> exposedAddresses;
 }

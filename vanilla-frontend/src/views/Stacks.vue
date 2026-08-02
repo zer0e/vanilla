@@ -145,6 +145,11 @@
           </el-table-column>
           <el-table-column prop="runningCount" label="运行数" width="80" align="center" />
           <el-table-column prop="replicas" label="副本数" width="80" align="center" />
+          <el-table-column label="暴露地址" min-width="200">
+            <template #default="{ row }">
+              <span class="text-muted">{{ (row.exposedAddresses || []).join(' · ') || '—' }}</span>
+            </template>
+          </el-table-column>
         </el-table>
       </template>
       <el-empty v-else description="暂无状态数据" />

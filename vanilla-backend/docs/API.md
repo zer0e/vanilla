@@ -347,13 +347,15 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
   "stackId": 1,
   "status": "RUNNING",
   "services": [
-    {"serviceId": 1, "serviceName": "nginx", "status": "RUNNING", "runningCount": 2, "healthyCount": 2, "replicas": 2},
-    {"serviceId": 2, "serviceName": "static", "status": "RUNNING", "runningCount": 1, "healthyCount": 1, "replicas": 1}
+    {"serviceId": 1, "serviceName": "nginx", "status": "RUNNING", "runningCount": 2, "healthyCount": 2, "replicas": 2, "exposedAddresses": ["192.168.139.2:30080"]},
+    {"serviceId": 2, "serviceName": "static", "status": "RUNNING", "runningCount": 1, "healthyCount": 1, "replicas": 1, "exposedAddresses": ["192.168.100.2:30081"]}
   ]
 }
 ```
 
 > `healthyCount`：服务配置了 `healthCheckCmd`（健康检查命令）时按容器健康状态统计——Docker 读取容器 HEALTHCHECK 状态、K8s 按 readyReplicas；未配置时等于 `runningCount`。
+
+> `exposedAddresses`：部署后服务对外暴露的地址列表——K8s 按 Service 类型展示（NodePort → `节点IP:nodePort`、LoadBalancer → `externalIP:port`、ClusterIP → `clusterIP:port`），Docker 按容器端口绑定展示（`宿主IP:宿主端口`，未部署为空数组）。
 
 **容器命名**：`vanilla-{stackId}-{serviceName}`（单副本）/ `vanilla-{stackId}-{serviceName}-{index}`（多副本）。
 

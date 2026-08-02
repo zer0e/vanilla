@@ -120,6 +120,11 @@
               show-overflow-tooltip
             />
             <el-table-column prop="replicas" label="副本" width="70" align="center" />
+            <el-table-column label="暴露地址" min-width="170">
+              <template #default="{ row }">
+                <span class="text-muted">{{ formatExposed(statusServices[row.id]) }}</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="cpu" label="CPU" width="70" align="center" />
             <el-table-column prop="memory" label="内存(MB)" width="100" align="center" />
             <el-table-column label="环境变量" width="100" align="center">
@@ -424,12 +429,22 @@ const stackName = ref(route.query.name || `#${stackId}`)
 
 // ---------- 栈状态 ----------
 const stackStatusName = ref('')
+// 服务 id → 状态对象（含暴露地址），供服务列表展示
+const statusServices = ref({})
+
+const formatExposed = (status) =>
+  status?.exposedAddresses?.length ? status.exposedAddresses.join(' · ') : '—'
+
 const refreshStatus = async () => {
   try {
     const res = await stackStatus(stackId, { silent: true })
     if (res?.status) {
       stackStatusName.value = res.status
     }
+    statusServices.value = (res?.services || []).reduce((map, s) => {
+      map[s.serviceId] = s
+      return map
+    }, {})
   } catch (e) {
     // 静默
   }

@@ -32,8 +32,13 @@ import io.fabric8.kubernetes.api.model.ContainerPortBuilder;
 import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.EnvVarBuilder;
 import io.fabric8.kubernetes.api.model.IntOrString;
+import io.fabric8.kubernetes.api.model.HasMetadata;
 import io.fabric8.kubernetes.api.model.LabelSelectorBuilder;
+import io.fabric8.kubernetes.api.model.LoadBalancerIngress;
 import io.fabric8.kubernetes.api.model.NamespaceBuilder;
+import io.fabric8.kubernetes.api.model.Node;
+import io.fabric8.kubernetes.api.model.NodeAddress;
+import io.fabric8.kubernetes.api.model.NodeList;
 import io.fabric8.kubernetes.api.model.PersistentVolumeClaim;
 import io.fabric8.kubernetes.api.model.PersistentVolumeClaimBuilder;
 import io.fabric8.kubernetes.api.model.Pod;
@@ -162,6 +167,15 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
             }
         }
         List<ServiceDo> services = serviceMapper.selectServicesByStackIdAndSearch(stack.getId(), null);
+        // 暴露地址：按 Service 资源回填（NodePort → 节点IP:nodePort，LoadBalancer → externalIP，ClusterIP → 集群内地址）
+        Map<String, io.fabric8.kubernetes.api.model.Service> svcByServiceId = new HashMap<>();
+        for (io.fabric8.kubernetes.api.model.Service svc : listStackServices(client, stack.getId())) {
+            String sid = labelOf(svc, Constants.SERVICE_ID_LABEL);
+            if (sid != null) {
+                svcByServiceId.put(sid, svc);
+            }
+        }
+        String nodeIp = firstNodeInternalIp(client);
         List<ServiceStatusVo> serviceStatuses = new ArrayList<>();
         for (ServiceDo service : services) {
             Deployment deployment = byService.get(String.valueOf(service.getId()));
@@ -181,6 +195,8 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
             status.setRunningCount(ready);
             status.setHealthyCount(ready);
             status.setStatus(RuntimeStateResolver.resolveStatus(total, ready));
+            status.setExposedAddresses(buildK8sExposedAddresses(
+                    svcByServiceId.get(String.valueOf(service.getId())), nodeIp));
             serviceStatuses.add(status);
         }
         StackStatusVo result = new StackStatusVo();
@@ -499,11 +515,104 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
                 .list().getItems();
     }
 
-    private String labelOf(Deployment deployment, String key) {
-        if (deployment.getMetadata() == null || deployment.getMetadata().getLabels() == null) {
+    private String labelOf(HasMetadata resource, String key) {
+        if (resource == null || resource.getMetadata() == null || resource.getMetadata().getLabels() == null) {
             return null;
         }
-        return deployment.getMetadata().getLabels().get(key);
+        return resource.getMetadata().getLabels().get(key);
+    }
+
+    /**
+     * 拉取栈下对应 Service 资源（无则空列表）
+     */
+    private List<io.fabric8.kubernetes.api.model.Service> listStackServices(KubernetesClient client, Integer stackId) {
+        try {
+            var op = client.services();
+            if (op == null) {
+                return Collections.emptyList();
+            }
+            return op.inNamespace(K8S_NAMESPACE)
+                    .withLabel(Constants.STACK_ID_LABEL, String.valueOf(stackId))
+                    .list().getItems();
+        } catch (Exception e) {
+            log.warn("list stack services err, stackId={}", stackId, e);
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * 取首个节点 InternalIP（用于 NodePort 展示；无节点信息返回空）
+     */
+    private String firstNodeInternalIp(KubernetesClient client) {
+        try {
+            var nodesOp = client.nodes();
+            if (nodesOp == null) {
+                return null;
+            }
+            NodeList nodes = nodesOp.list();
+            if (nodes == null || nodes.getItems() == null) {
+                return null;
+            }
+            for (Node node : nodes.getItems()) {
+                if (node.getStatus() == null || node.getStatus().getAddresses() == null) {
+                    continue;
+                }
+                for (NodeAddress address : node.getStatus().getAddresses()) {
+                    if ("InternalIP".equals(address.getType()) && StringUtils.hasText(address.getAddress())) {
+                        return address.getAddress();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("list nodes for exposed addr err", e);
+        }
+        return null;
+    }
+
+    /**
+     * 按 Service 内容生成暴露地址：
+     * LoadBalancer → externalIP:port（未就绪显示 LB pending）；NodePort → nodeIp:nodePort；
+     * ClusterIP → clusterIp:port（集群内访问）。
+     */
+    List<String> buildK8sExposedAddresses(io.fabric8.kubernetes.api.model.Service svc, String nodeIp) {
+        if (svc == null || svc.getSpec() == null || svc.getSpec().getPorts() == null) {
+            return Collections.emptyList();
+        }
+        String type = svc.getSpec().getType();
+        String clusterIp = svc.getSpec().getClusterIP();
+        List<String> result = new ArrayList<>();
+        if ("LoadBalancer".equals(type)) {
+            List<String> ingress = new ArrayList<>();
+            if (svc.getStatus() != null && svc.getStatus().getLoadBalancer() != null
+                    && svc.getStatus().getLoadBalancer().getIngress() != null) {
+                for (LoadBalancerIngress entry : svc.getStatus().getLoadBalancer().getIngress()) {
+                    String ip = entry.getIp() != null ? entry.getIp() : entry.getHostname();
+                    if (StringUtils.hasText(ip)) {
+                        ingress.add(ip.trim());
+                    }
+                }
+            }
+            for (ServicePort port : svc.getSpec().getPorts()) {
+                if (ingress.isEmpty()) {
+                    result.add("LB pending:" + port.getPort());
+                } else {
+                    ingress.forEach(ip -> result.add(ip + ":" + port.getPort()));
+                }
+            }
+        } else if ("NodePort".equals(type)) {
+            String host = StringUtils.hasText(nodeIp) ? nodeIp
+                    : (StringUtils.hasText(clusterIp) ? clusterIp : "NodePort");
+            for (ServicePort port : svc.getSpec().getPorts()) {
+                if (port.getNodePort() != null) {
+                    result.add(host + ":" + port.getNodePort());
+                }
+            }
+        } else {
+            for (ServicePort port : svc.getSpec().getPorts()) {
+                result.add((StringUtils.hasText(clusterIp) ? clusterIp : "ClusterIP") + ":" + port.getPort());
+            }
+        }
+        return result;
     }
 
     private DeploymentStrategy buildStrategy(ServiceDo service) {

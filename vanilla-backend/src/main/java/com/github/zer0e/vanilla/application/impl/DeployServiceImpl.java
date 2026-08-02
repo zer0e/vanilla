@@ -9,6 +9,7 @@ import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.command.InspectContainerResponse.ContainerState;
 import com.github.dockerjava.api.command.HealthState;
+import com.github.dockerjava.api.model.ContainerPort;
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.HealthCheck;
 import com.github.dockerjava.api.model.HostConfig;
@@ -49,6 +50,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -126,6 +128,7 @@ public class DeployServiceImpl implements DeployService {
                     ? countHealthy(client, svcContainers)
                     : (int) running);
             status.setStatus(resolveStatus(svcContainers.size(), running));
+            status.setExposedAddresses(buildDockerExposedAddresses(svcContainers));
             serviceStatuses.add(status);
         }
 
@@ -513,6 +516,24 @@ public class DeployServiceImpl implements DeployService {
             return null;
         }
         return envs.stream().map(e -> e.getName() + "=" + e.getValue()).toList();
+    }
+
+    /**
+     * 从容器端口绑定提取暴露地址（宿主ip:宿主端口），多副本去重
+     */
+    List<String> buildDockerExposedAddresses(List<Container> containers) {
+        if (CollectionUtils.isEmpty(containers)) {
+            return Collections.emptyList();
+        }
+        return containers.stream()
+                .flatMap(c -> Arrays.stream(c.getPorts() == null ? new ContainerPort[0] : c.getPorts()))
+                .filter(p -> p.getPublicPort() != null)
+                .map(p -> {
+                    String hostIp = StringUtils.hasText(p.getIp()) ? p.getIp() : "0.0.0.0";
+                    return hostIp + ":" + p.getPublicPort();
+                })
+                .distinct()
+                .toList();
     }
 
     private boolean hasHealthCheck(ServiceDo service) {

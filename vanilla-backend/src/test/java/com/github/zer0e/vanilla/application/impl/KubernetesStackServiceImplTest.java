@@ -176,6 +176,62 @@ class KubernetesStackServiceImplTest {
                 .getVolumeMounts().get(0).getMountPath()).isEqualTo("/data");
     }
 
+    // ---- 暴露地址：NodePort / LoadBalancer / ClusterIP ----
+
+    @Test
+    void getStackStatus_exposesNodePortAndLoadBalancerAddresses() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(service(2, "api", 1), service(1, "nginx", 1)));
+        stubDeploymentsList(deployment(1, "vanilla-1-nginx", "1", 1, 1),
+                deployment(2, "vanilla-2-api", "2", 1, 1));
+
+        io.fabric8.kubernetes.api.model.Service nodePortSvc = new io.fabric8.kubernetes.api.model.ServiceBuilder()
+                .withNewMetadata().withName("vanilla-1-nginx")
+                .addToLabels(Constants.STACK_ID_LABEL, "1").addToLabels(Constants.SERVICE_ID_LABEL, "1")
+                .endMetadata()
+                .withNewSpec().withType("NodePort").withClusterIP("192.168.0.1")
+                .addNewPort().withPort(80).withProtocol("TCP").withNodePort(30080).endPort()
+                .endSpec()
+                .build();
+        io.fabric8.kubernetes.api.model.Service lbSvc = new io.fabric8.kubernetes.api.model.ServiceBuilder()
+                .withNewMetadata().withName("vanilla-2-api")
+                .addToLabels(Constants.STACK_ID_LABEL, "1").addToLabels(Constants.SERVICE_ID_LABEL, "2")
+                .endMetadata()
+                .withNewSpec().withType("LoadBalancer").withClusterIP("10.0.0.5")
+                .addNewPort().withPort(80).withProtocol("TCP").endPort()
+                .endSpec()
+                .withStatus(new io.fabric8.kubernetes.api.model.ServiceStatusBuilder()
+                        .withNewLoadBalancer()
+                        .addNewIngress().withIp("1.2.3.4").endIngress()
+                        .endLoadBalancer()
+                        .build())
+                .build();
+        stubServicesList(List.of(nodePortSvc, lbSvc));
+
+        var vo = kubeStackService.getStackStatus(new DeployStackDto(1));
+
+        // 无节点 IP 时 NodePort 回退展示 ClusterIP:nodePort；LoadBalancer 展示 externalIP:port
+        assertThat(vo.getServices().stream().filter(s -> s.getServiceName().equals("nginx"))
+                .findFirst().orElseThrow().getExposedAddresses()).containsExactly("192.168.0.1:30080");
+        assertThat(vo.getServices().stream().filter(s -> s.getServiceName().equals("api"))
+                .findFirst().orElseThrow().getExposedAddresses()).containsExactly("1.2.3.4:80");
+    }
+
+    @Test
+    void buildK8sExposedAddresses_loadBalancerPending_showsPending() {
+        io.fabric8.kubernetes.api.model.Service svc = new io.fabric8.kubernetes.api.model.ServiceBuilder()
+                .withNewSpec().withType("LoadBalancer")
+                .addNewPort().withPort(80).endPort()
+                .endSpec()
+                .build();
+
+        assertThat(kubeStackService.buildK8sExposedAddresses(svc, null))
+                .containsExactly("LB pending:80");
+    }
+
     // ---- 自定义 Service 类型：ClusterIP / LoadBalancer / 大端口 NodePort ----
 
     private void stubDeployBase(String serviceType) throws Exception {

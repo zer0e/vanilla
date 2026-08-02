@@ -12,6 +12,7 @@ import com.github.dockerjava.api.command.LogContainerCmd;
 import com.github.dockerjava.api.command.PullImageCmd;
 import com.github.dockerjava.api.command.RemoveContainerCmd;
 import com.github.dockerjava.api.command.StartContainerCmd;
+import com.github.dockerjava.api.model.ContainerPort;
 import com.github.dockerjava.api.model.HealthCheck;
 import com.github.dockerjava.core.command.LogContainerResultCallback;
 import com.github.dockerjava.api.model.Bind;
@@ -411,6 +412,28 @@ class DeployServiceImplTest {
         verify(kubernetesStackService).deployStack(new DeployStackDto(1));
         // K8S 集群不触碰 Docker 连接
         verify(dockerClientFactory, never()).getClient(anyInt());
+    }
+
+    @Test
+    void buildDockerExposedAddresses_collectsPublicPortBindings() {
+        ContainerPort cp1 = mock(ContainerPort.class);
+        when(cp1.getIp()).thenReturn("0.0.0.0");
+        when(cp1.getPublicPort()).thenReturn(80);
+        ContainerPort cp2 = mock(ContainerPort.class);
+        when(cp2.getIp()).thenReturn("192.168.1.5");
+        when(cp2.getPublicPort()).thenReturn(81);
+        Container c = container("abc");
+        when(c.getPorts()).thenReturn(new ContainerPort[]{cp1, cp1, cp2});
+
+        List<String> exposed = deployService.buildDockerExposedAddresses(List.of(c));
+
+        assertThat(exposed).containsExactly("0.0.0.0:80", "192.168.1.5:81");
+    }
+
+    @Test
+    void buildDockerExposedAddresses_emptyAndNoPorts() {
+        assertThat(deployService.buildDockerExposedAddresses(Collections.emptyList())).isEmpty();
+        assertThat(deployService.buildDockerExposedAddresses(List.of(container("abc")))).isEmpty();
     }
 
     // ---- 容器日志：按副本索引选容器、默认取运行副本、未部署报错 ----
