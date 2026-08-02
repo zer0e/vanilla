@@ -9,12 +9,7 @@ public class VolumeVo {
     private Integer stackId;
 
     /**
-     * 所属服务
-     */
-    private Integer serviceId;
-
-    /**
-     * 卷名称 一旦创建不允许修改
+     * 卷名称 栈内唯一，一旦创建不允许修改
      */
     private String volumeName;
 

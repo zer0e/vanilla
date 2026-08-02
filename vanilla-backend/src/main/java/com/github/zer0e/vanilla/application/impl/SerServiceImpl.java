@@ -20,8 +20,10 @@ import com.github.zer0e.vanilla.domain.Volume;
 import com.github.zer0e.vanilla.infrastructure.converter.ServiceConverter;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.PortMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceVolumeMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.StackMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.VolumeMapper;
+import com.github.zer0e.vanilla.infrastructure.db.repository.ServiceVolumeDo;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.zer0e.vanilla.infrastructure.db.repository.PortDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.ServiceDo;
@@ -37,7 +39,9 @@ import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -53,6 +57,7 @@ public class SerServiceImpl implements SerService {
     private final StackMapper stackMapper;
     private final PortMapper portMapper;
     private final VolumeMapper volumeMapper;
+    private final ServiceVolumeMapper serviceVolumeMapper;
     private final HistoryService historyService;
 
     private static final Set<String> SUPPORTED_SERVICE_TYPES = Set.of("ClusterIP", "NodePort", "LoadBalancer");
@@ -84,6 +89,8 @@ public class SerServiceImpl implements SerService {
         serviceDo.setCreateUser(currentUserName);
         serviceDo.setCreateTime(LocalDateTime.now());
         serviceMapper.insert(serviceDo);
+        // 引用栈级卷（不归属于服务，删除服务不影响卷）
+        replaceVolumeRefs(serviceDo.getId(), createServiceDto.getVolumeIds());
         recordHistory(serviceDo.getStackId(), "创建服务 " + serviceDo.getServiceName() + "，镜像：" + serviceDo.getImage());
         return ServiceConverter.INSTANCE.toVo(serviceDo);
     }
@@ -104,6 +111,10 @@ public class SerServiceImpl implements SerService {
         serviceDo.setModifyTime(LocalDateTime.now());
         serviceDo.setModifyUser(SecurityUtil.getCurrentUserName());
         serviceMapper.updateById(serviceDo);
+        // 卷引用：非 null 表示全量替换（卷本身保持不变）
+        if (updateServiceDto.getVolumeIds() != null) {
+            replaceVolumeRefs(serviceDo.getId(), updateServiceDto.getVolumeIds());
+        }
         recordHistory(serviceDo.getStackId(), "更新服务 " + serviceDo.getServiceName());
         return ServiceConverter.INSTANCE.toVo(serviceDo);
     }
@@ -118,10 +129,10 @@ public class SerServiceImpl implements SerService {
         if (!Objects.equals(deleteServiceDto.getStackId(), serviceDo.getStackId())) {
             throw new BusinessException(Constants.SERVICE_NOT_EXIST);
         }
-        // 物理删除服务并清理其端口/卷：释放 uk_stack_service 唯一键，允许同名服务重新创建
-        // （软删除会在唯一索引上永久占名，导致删除后再添加同名服务报唯一键冲突）
+        // 物理删除服务：清理端口与其卷引用，释放 uk_stack_service 唯一键；卷本身（栈级资源）不受影响
         portMapper.delete(new LambdaQueryWrapper<PortDo>().eq(PortDo::getServiceId, serviceDo.getId()));
-        volumeMapper.delete(new LambdaQueryWrapper<VolumeDo>().eq(VolumeDo::getServiceId, serviceDo.getId()));
+        serviceVolumeMapper.delete(new LambdaQueryWrapper<ServiceVolumeDo>()
+                .eq(ServiceVolumeDo::getServiceId, serviceDo.getId()));
         serviceMapper.deleteById(serviceDo.getId());
         recordHistory(serviceDo.getStackId(), "删除服务 " + serviceDo.getServiceName());
     }
@@ -154,9 +165,23 @@ public class SerServiceImpl implements SerService {
         List<PortDo> portDos = portMapper.selectPortsByServiceIds(serviceIds);
         Map<Integer, List<Port>> portMap = portDos.stream().collect(Collectors.groupingBy(PortDo::getServiceId,
                 Collectors.mapping(SerServiceImpl::toPort, Collectors.toList())));
-        List<VolumeDo> volumeDos = volumeMapper.selectVolumesByServiceIds(serviceIds);
-        Map<Integer, List<Volume>> volumeMap = volumeDos.stream().collect(Collectors.groupingBy(VolumeDo::getServiceId,
-                Collectors.mapping(SerServiceImpl::toVolume, Collectors.toList())));
+        // 卷引用：经 t_service_volume 关联，卷本身为栈级资源（serviceId 可能为 null，不能用 groupingBy 卷内字段）
+        Map<Integer, List<Volume>> volumeMap = new HashMap<>();
+        List<ServiceVolumeDo> refs = serviceVolumeMapper.selectList(new LambdaQueryWrapper<ServiceVolumeDo>()
+                .in(ServiceVolumeDo::getServiceId, serviceIds));
+        if (!CollectionUtils.isEmpty(refs)) {
+            Map<Integer, VolumeDo> volumeById = volumeMapper.selectBatchIds(
+                            refs.stream().map(ServiceVolumeDo::getVolumeId).distinct().toList()).stream()
+                    .filter(v -> v.getStatus() == DataStatus.EXIST.ordinal())
+                    .collect(Collectors.toMap(VolumeDo::getId, java.util.function.Function.identity()));
+            for (ServiceVolumeDo ref : refs) {
+                VolumeDo volumeDo = volumeById.get(ref.getVolumeId());
+                if (volumeDo == null) {
+                    continue;
+                }
+                volumeMap.computeIfAbsent(ref.getServiceId(), k -> new ArrayList<>()).add(toVolume(volumeDo));
+            }
+        }
         for (ServiceVo serviceVo : serviceVos) {
             serviceVo.setPorts(portMap.getOrDefault(serviceVo.getId(), Collections.emptyList()));
             serviceVo.setVolumes(volumeMap.getOrDefault(serviceVo.getId(), Collections.emptyList()));
@@ -182,6 +207,24 @@ public class SerServiceImpl implements SerService {
         volume.setSize(volumeDo.getSize());
         volume.setMountPath(volumeDo.getMountPath());
         return volume;
+    }
+
+    /**
+     * 全量替换服务的卷引用（删除旧引用后写入新引用；卷本身是栈级资源，不随之增删）
+     */
+    private void replaceVolumeRefs(Integer serviceId, List<Integer> volumeIds) {
+        serviceVolumeMapper.delete(new LambdaQueryWrapper<ServiceVolumeDo>()
+                .eq(ServiceVolumeDo::getServiceId, serviceId));
+        if (CollectionUtils.isEmpty(volumeIds)) {
+            return;
+        }
+        List<ServiceVolumeDo> refs = new ArrayList<>();
+        volumeIds.stream().filter(Objects::nonNull).distinct().forEach(volumeId ->
+                refs.add(ServiceVolumeDo.builder()
+                        .serviceId(serviceId).volumeId(volumeId).createTime(LocalDateTime.now()).build()));
+        if (!refs.isEmpty()) {
+            serviceVolumeMapper.insert(refs);
+        }
     }
 
     private void recordHistory(Integer stackId, String event) {

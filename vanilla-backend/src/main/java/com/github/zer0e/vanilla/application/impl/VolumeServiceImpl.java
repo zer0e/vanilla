@@ -1,5 +1,6 @@
 package com.github.zer0e.vanilla.application.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import com.github.zer0e.vanilla.application.HistoryService;
@@ -16,10 +17,10 @@ import com.github.zer0e.vanilla.common.exception.BusinessException;
 import com.github.zer0e.vanilla.common.util.SecurityUtil;
 import com.github.zer0e.vanilla.domain.DataStatus;
 import com.github.zer0e.vanilla.infrastructure.converter.VolumeConverter;
-import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceVolumeMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.StackMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.VolumeMapper;
-import com.github.zer0e.vanilla.infrastructure.db.repository.ServiceDo;
+import com.github.zer0e.vanilla.infrastructure.db.repository.ServiceVolumeDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.StackDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.VolumeDo;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,11 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * 卷为栈级独立资源（不再挂靠具体服务）：
+ * 独立页面维护，服务通过引用关联；删除服务不影响卷，删除卷会同步清理服务引用。
+ * 删除采用物理删除以释放卷名（栈内唯一键）。
+ */
 @Service
 @Slf4j
 @RequiredArgsConstructor
@@ -39,7 +45,7 @@ public class VolumeServiceImpl implements VolumeService {
 
     private final VolumeMapper volumeMapper;
     private final StackMapper stackMapper;
-    private final ServiceMapper serviceMapper;
+    private final ServiceVolumeMapper serviceVolumeMapper;
     private final HistoryService historyService;
 
     @Override
@@ -47,8 +53,11 @@ public class VolumeServiceImpl implements VolumeService {
             "'stack_' + #createVolumeDto.stackId + '_stack_member')")
     @Transactional(rollbackFor = Exception.class)
     public VolumeVo createVolume(CreateVolumeDto createVolumeDto) throws BusinessException {
-        ServiceDo serviceDo = checkService(createVolumeDto.getStackId(), createVolumeDto.getServiceId());
-        VolumeDo repeat = volumeMapper.selectByServiceIdAndName(createVolumeDto.getServiceId(), createVolumeDto.getVolumeName());
+        StackDo stackDo = stackMapper.selectById(createVolumeDto.getStackId());
+        if (stackDo == null || stackDo.getStatus() != DataStatus.EXIST.ordinal()) {
+            throw new BusinessException(Constants.STACK_NOT_EXIST);
+        }
+        VolumeDo repeat = volumeMapper.selectByStackIdAndName(createVolumeDto.getStackId(), createVolumeDto.getVolumeName());
         if (repeat != null) {
             throw new BusinessException(Constants.VOLUME_DUPLICATE);
         }
@@ -59,7 +68,7 @@ public class VolumeServiceImpl implements VolumeService {
         volumeDo.setCreateTime(LocalDateTime.now());
         volumeMapper.insert(volumeDo);
         recordHistory(createVolumeDto.getStackId(),
-                "为服务 " + serviceDo.getServiceName() + " 创建卷 " + volumeDo.getVolumeName()
+                "创建卷 " + volumeDo.getVolumeName()
                         + "（" + volumeDo.getSize() + "GB → " + volumeDo.getMountPath() + "）");
         return VolumeConverter.INSTANCE.toVo(volumeDo);
     }
@@ -89,16 +98,17 @@ public class VolumeServiceImpl implements VolumeService {
 
     @Override
     @PreAuthorize("hasAnyRole('stack_' + #deleteVolumeDto.stackId + '_stack_admin')")
+    @Transactional(rollbackFor = Exception.class)
     public void deleteVolume(DeleteVolumeDto deleteVolumeDto) throws BusinessException {
         VolumeDo volumeDo = volumeMapper.selectById(deleteVolumeDto.getId());
         if (volumeDo == null || volumeDo.getStatus() != DataStatus.EXIST.ordinal()
                 || !Objects.equals(volumeDo.getStackId(), deleteVolumeDto.getStackId())) {
             throw new BusinessException(Constants.VOLUME_NOT_EXIST);
         }
-        volumeDo.setStatus(DataStatus.NOT_EXIST.ordinal());
-        volumeDo.setDeleteTime(LocalDateTime.now());
-        volumeDo.setDeleteUser(SecurityUtil.getCurrentUserName());
-        volumeMapper.updateById(volumeDo);
+        // 物理删除卷并清理服务引用（释放栈内卷名，避免唯一键占用）
+        serviceVolumeMapper.delete(new LambdaQueryWrapper<ServiceVolumeDo>()
+                .eq(ServiceVolumeDo::getVolumeId, volumeDo.getId()));
+        volumeMapper.deleteById(volumeDo.getId());
         recordHistory(deleteVolumeDto.getStackId(), "删除卷 " + volumeDo.getVolumeName());
     }
 
@@ -111,23 +121,10 @@ public class VolumeServiceImpl implements VolumeService {
         Integer page = getVolumesDto.getPage();
         String search = getVolumesDto.getSearch();
         PageHelper.startPage(page, size);
-        List<VolumeDo> volumeDos = volumeMapper.selectVolumesByServiceIdAndSearch(getVolumesDto.getServiceId(), search);
+        List<VolumeDo> volumeDos = volumeMapper.selectVolumesByStackIdAndSearch(getVolumesDto.getStackId(), search);
         List<VolumeVo> volumeVos = volumeDos.stream().map(VolumeConverter.INSTANCE::toVo).toList();
         PageInfo<VolumeDo> pageInfo = new PageInfo<>(volumeDos);
         return new PageData<>(page, size, pageInfo.getTotal(), volumeVos);
-    }
-
-    private ServiceDo checkService(Integer stackId, Integer serviceId) throws BusinessException {
-        StackDo stackDo = stackMapper.selectById(stackId);
-        if (stackDo == null || stackDo.getStatus() != DataStatus.EXIST.ordinal()) {
-            throw new BusinessException(Constants.STACK_NOT_EXIST);
-        }
-        ServiceDo serviceDo = serviceMapper.selectById(serviceId);
-        if (serviceDo == null || serviceDo.getStatus() != DataStatus.EXIST.ordinal()
-                || !Objects.equals(serviceDo.getStackId(), stackId)) {
-            throw new BusinessException(Constants.SERVICE_NOT_EXIST);
-        }
-        return serviceDo;
     }
 
     private void recordHistory(Integer stackId, String event) {

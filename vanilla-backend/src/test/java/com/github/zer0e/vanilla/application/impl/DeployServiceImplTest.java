@@ -154,18 +154,18 @@ class DeployServiceImplTest {
     void buildVolumeBinds_mapsDockerVolumeToContainerPath() {
         VolumeDo data = VolumeDo.builder().stackId(1).serviceId(1).volumeName("data").mountPath("/data").build();
 
-        List<Bind> binds = deployService.buildVolumeBinds(1, 1, List.of(data));
+        List<Bind> binds = deployService.buildVolumeBinds(1, List.of(data));
 
         assertThat(binds).hasSize(1);
         // Docker named volume = vanilla-{stackId}-{serviceId}-{volumeName}
-        assertThat(binds.get(0).getPath()).isEqualTo("vanilla-1-1-data");
+        assertThat(binds.get(0).getPath()).isEqualTo("vanilla-1-data");
         // 容器内挂载路径
         assertThat(binds.get(0).getVolume().getPath()).isEqualTo("/data");
     }
 
     @Test
     void buildVolumeBinds_empty_returnsEmpty() {
-        assertThat(deployService.buildVolumeBinds(1, 1, Collections.emptyList())).isEmpty();
+        assertThat(deployService.buildVolumeBinds(1, Collections.emptyList())).isEmpty();
     }
 
     // ---- validateHostPorts：跨服务/副本宿主端口冲突预校验 ----

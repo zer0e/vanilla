@@ -10,9 +10,6 @@ public class GetVolumesDto {
     @NotNull(message = "栈id不能为空")
     private Integer stackId;
 
-    @NotNull(message = "服务id不能为空")
-    private Integer serviceId;
-
     @Schema(requiredMode = Schema.RequiredMode.NOT_REQUIRED, defaultValue = "1")
     private Integer page;
 

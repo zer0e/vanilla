@@ -85,26 +85,14 @@
                   <div class="expanded-section">
                     <div class="section-title">
                       <span>卷</span>
-                      <el-button size="small" type="primary" @click="openVolumeDialog(service)">
-                        添加卷
-                      </el-button>
+                      <span class="text-muted">在「卷管理」页维护，服务引用挂载</span>
                     </div>
                     <el-table :data="service.volumes || []" size="small" border>
-                      <el-table-column prop="volumeName" label="卷名称" width="140" />
+                      <el-table-column prop="volumeName" label="卷名称" width="150" />
                       <el-table-column prop="size" label="大小(GB)" width="100" align="center" />
                       <el-table-column prop="mountPath" label="挂载路径" min-width="160" />
-                      <el-table-column label="操作" width="140">
-                        <template #default="{ row: vol }">
-                          <el-button size="small" type="primary" link @click="openVolumeDialog(service, vol)">
-                            编辑
-                          </el-button>
-                          <el-button size="small" type="danger" link @click="handleDeleteVolume(service, vol)">
-                            删除
-                          </el-button>
-                        </template>
-                      </el-table-column>
                       <template #empty>
-                        <span class="text-muted">暂无卷</span>
+                        <span class="text-muted">未引用任何卷</span>
                       </template>
                     </el-table>
                   </div>
@@ -162,6 +150,51 @@
             class="pagination"
             @current-change="loadServices"
             @size-change="handleServiceSizeChange"
+          />
+        </el-tab-pane>
+
+        <!-- 卷管理（栈级独立资源） -->
+        <el-tab-pane label="卷管理" name="volumes">
+          <div class="toolbar">
+            <el-input
+              v-model="volumeSearch"
+              placeholder="搜索卷名称"
+              clearable
+              style="width: 240px"
+              @change="handleVolumeSearch"
+              @clear="handleVolumeSearch"
+            >
+              <template #append>
+                <el-button @click="handleVolumeSearch"><el-icon><Search /></el-icon></el-button>
+              </template>
+            </el-input>
+            <el-button type="primary" @click="openVolumeDialog()">
+              <el-icon><Plus /></el-icon>&nbsp;新建卷
+            </el-button>
+          </div>
+
+          <el-table v-loading="volumesLoading" :data="volumes" stripe>
+            <el-table-column prop="volumeName" label="卷名称" min-width="150" />
+            <el-table-column prop="size" label="大小(GB)" width="100" align="center" />
+            <el-table-column prop="mountPath" label="挂载路径" min-width="170" />
+            <el-table-column prop="createTime" label="创建时间" width="165" />
+            <el-table-column label="操作" width="140" fixed="right">
+              <template #default="{ row }">
+                <el-button type="primary" link @click="openVolumeDialog(row)">编辑</el-button>
+                <el-button type="danger" link @click="handleDeleteVolume(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-if="!volumesLoading && volumes.length === 0" description="暂无卷，点击右上角新建卷" />
+          <el-pagination
+            v-model:current-page="volumePage"
+            v-model:page-size="volumeSize"
+            :total="volumeCount"
+            :page-sizes="[10, 15, 20, 50]"
+            layout="total, sizes, prev, pager, next, jumper"
+            class="pagination"
+            @current-change="loadVolumes"
+            @size-change="handleVolumeSizeChange"
           />
         </el-tab-pane>
 
@@ -297,6 +330,22 @@
             </div>
           </div>
         </el-form-item>
+        <el-form-item label="引用卷">
+          <el-select
+            v-model="serviceForm.volumeIds"
+            multiple
+            clearable
+            placeholder="选择要挂载的卷（在卷管理页维护，删除服务不影响卷）"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="v in stackVolumeOptions"
+              :key="v.id"
+              :label="`${v.volumeName}（挂载 ${v.mountPath || '/'}）`"
+              :value="v.id"
+            />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="serviceDialogVisible = false">取消</el-button>
@@ -410,7 +459,7 @@ import {
   deleteService
 } from '@/api/service'
 import { createPort, updatePort, deletePort } from '@/api/port'
-import { createVolume, updateVolume, deleteVolume } from '@/api/volume'
+import { getVolumes, createVolume, updateVolume, deleteVolume } from '@/api/volume'
 import { getHistory } from '@/api/history'
 import {
   stackStatus,
@@ -640,7 +689,8 @@ function defaultServiceForm() {
     healthCheckCmd: '',
     strategy: 'Recreate',
     serviceType: '',
-    envs: []
+    envs: [],
+    volumeIds: []
   }
 }
 
@@ -661,7 +711,8 @@ const openServiceDialog = (row) => {
       healthCheckCmd: row.healthCheckCmd || '',
       strategy: row.strategy || 'Recreate',
       serviceType: row.serviceType || '',
-      envs: (row.envs || []).map((e) => ({ ...e }))
+      envs: (row.envs || []).map((e) => ({ ...e })),
+      volumeIds: (row.volumes || []).map((v) => v.id)
     }
   } else {
     serviceForm.value = defaultServiceForm()
@@ -797,7 +848,13 @@ const handleDeletePort = (service, port) => {
     .catch(() => {})
 }
 
-// ---------- 卷 ----------
+// ---------- 卷（栈级独立资源，服务通过引用挂载） ----------
+const volumesLoading = ref(false)
+const volumes = ref([])
+const volumeCount = ref(0)
+const volumePage = ref(1)
+const volumeSize = ref(15)
+const volumeSearch = ref('')
 const volumeDialogVisible = ref(false)
 const savingVolume = ref(false)
 const volumeFormRef = ref()
@@ -808,29 +865,66 @@ const volumeFormRules = {
   mountPath: [{ required: true, message: '请输入挂载路径', trigger: 'blur' }]
 }
 
+// 服务表单「引用卷」选项（栈下全部卷）
+const stackVolumeOptions = ref([])
+const loadStackVolumeOptions = async () => {
+  try {
+    const res = await getVolumes({ stackId, page: 1, size: 100 })
+    stackVolumeOptions.value = res?.data || []
+  } catch (e) {
+    stackVolumeOptions.value = []
+  }
+}
+
 function defaultVolumeForm() {
   return {
     id: null,
     stackId,
-    serviceId: null,
     volumeName: '',
     size: 1,
     mountPath: ''
   }
 }
 
-const openVolumeDialog = (service, vol) => {
+const loadVolumes = async () => {
+  volumesLoading.value = true
+  try {
+    const res = await getVolumes({
+      stackId,
+      page: volumePage.value,
+      size: volumeSize.value,
+      search: volumeSearch.value || undefined
+    })
+    volumes.value = res?.data || []
+    volumeCount.value = res?.count || 0
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    volumesLoading.value = false
+  }
+}
+
+const handleVolumeSearch = () => {
+  volumePage.value = 1
+  loadVolumes()
+}
+
+const handleVolumeSizeChange = () => {
+  volumePage.value = 1
+  loadVolumes()
+}
+
+const openVolumeDialog = (vol) => {
   if (vol) {
     volumeForm.value = {
       id: vol.id,
       stackId,
-      serviceId: service.id,
       volumeName: vol.volumeName,
       size: vol.size ?? 1,
       mountPath: vol.mountPath || ''
     }
   } else {
-    volumeForm.value = { ...defaultVolumeForm(), serviceId: service.id }
+    volumeForm.value = defaultVolumeForm()
   }
   volumeDialogVisible.value = true
 }
@@ -847,10 +941,11 @@ const saveVolume = () => {
         ElMessage.success('卷已更新')
       } else {
         await createVolume({ ...volumeForm.value })
-        ElMessage.success('卷已添加')
+        ElMessage.success('卷已创建')
       }
       volumeDialogVisible.value = false
-      await loadServices()
+      await loadVolumes()
+      await loadStackVolumeOptions()
     } catch (e) {
       // 拦截器已提示
     } finally {
@@ -859,8 +954,8 @@ const saveVolume = () => {
   })
 }
 
-const handleDeleteVolume = (service, vol) => {
-  ElMessageBox.confirm(`确定删除卷「${vol.volumeName}」吗？`, '删除确认', {
+const handleDeleteVolume = (vol) => {
+  ElMessageBox.confirm(`确定删除卷「${vol.volumeName}」吗？将同步解除服务引用（卷本身不可恢复）。`, '删除确认', {
     confirmButtonText: '删除',
     cancelButtonText: '取消',
     type: 'warning'
@@ -869,6 +964,8 @@ const handleDeleteVolume = (service, vol) => {
       try {
         await deleteVolume(stackId, vol.id)
         ElMessage.success('卷已删除')
+        await loadVolumes()
+        await loadStackVolumeOptions()
         await loadServices()
       } catch (e) {
         // 拦截器已提示
@@ -911,11 +1008,15 @@ watch(activeTab, (tab) => {
   if (tab === 'history') {
     loadHistory()
   }
+  if (tab === 'volumes') {
+    loadVolumes()
+  }
 })
 
 onMounted(() => {
   loadServices()
   refreshStatus()
+  loadStackVolumeOptions()
 })
 </script>
 

@@ -276,8 +276,8 @@ public class DeployServiceImpl implements DeployService {
         try {
             pullImage(client, service.getImage());
             List<PortDo> ports = portMapper.selectPortsByServiceId(service.getId());
-            List<VolumeDo> volumes = volumeMapper.selectVolumesByServiceIdAndSearch(service.getId(), null);
-            ensureDockerVolumes(client, stack.getId(), service.getId(), volumes);
+            List<VolumeDo> volumes = volumeMapper.selectVolumesByServiceIds(List.of(service.getId()));
+            ensureDockerVolumes(client, stack.getId(), volumes);
             int replicas = service.getReplicas() == null ? 1 : Math.max(1, service.getReplicas());
             List<Container> existing = listServiceContainers(client, stack.getId(), service.getId());
             if (isRollingUpdate(service)) {
@@ -296,12 +296,12 @@ public class DeployServiceImpl implements DeployService {
     /**
      * 确保服务的 Docker named volume 存在（部署前幂等创建）
      */
-    private void ensureDockerVolumes(DockerClient client, Integer stackId, Integer serviceId, List<VolumeDo> volumes) {
+    private void ensureDockerVolumes(DockerClient client, Integer stackId, List<VolumeDo> volumes) {
         if (CollectionUtils.isEmpty(volumes)) {
             return;
         }
         for (VolumeDo volume : volumes) {
-            String name = dockerVolumeName(stackId, serviceId, volume);
+            String name = dockerVolumeName(stackId, volume);
             boolean exists;
             try {
                 client.inspectVolumeCmd(name).exec();
@@ -325,18 +325,18 @@ public class DeployServiceImpl implements DeployService {
     /**
      * 构建卷挂载绑定（Docker named volume → 容器挂载路径）
      */
-    List<Bind> buildVolumeBinds(Integer stackId, Integer serviceId, List<VolumeDo> volumes) {
+    List<Bind> buildVolumeBinds(Integer stackId, List<VolumeDo> volumes) {
         if (CollectionUtils.isEmpty(volumes)) {
             return Collections.emptyList();
         }
         return volumes.stream()
-                .map(v -> new Bind(dockerVolumeName(stackId, serviceId, v), new Volume(v.getMountPath())))
+                .map(v -> new Bind(dockerVolumeName(stackId, v), new Volume(v.getMountPath())))
                 .toList();
     }
 
-    private String dockerVolumeName(Integer stackId, Integer serviceId, VolumeDo volume) {
-        return sanitizeContainerName(Constants.CONTAINER_NAME_PREFIX + stackId + "-" + serviceId
-                + "-" + volume.getVolumeName());
+    // 卷为栈级共享资源：命名不携带 serviceId，同一栈内多服务可挂载同一卷
+    private String dockerVolumeName(Integer stackId, VolumeDo volume) {
+        return sanitizeContainerName(Constants.CONTAINER_NAME_PREFIX + stackId + "-" + volume.getVolumeName());
     }
 
     private boolean isRollingUpdate(ServiceDo service) {
@@ -450,7 +450,7 @@ public class DeployServiceImpl implements DeployService {
         // 多副本时宿主端口按副本索引递增偏移，避免端口冲突
         List<ExposedPort> exposedPorts = new ArrayList<>();
         HostConfig hostConfig = buildHostConfig(service, ports, replicaIndex, exposedPorts);
-        List<Bind> binds = buildVolumeBinds(stack.getId(), service.getId(), volumes);
+        List<Bind> binds = buildVolumeBinds(stack.getId(), volumes);
         if (!CollectionUtils.isEmpty(binds)) {
             hostConfig.withBinds(binds);
         }

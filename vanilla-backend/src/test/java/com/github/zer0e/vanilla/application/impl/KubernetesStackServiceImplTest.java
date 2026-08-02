@@ -120,7 +120,7 @@ class KubernetesStackServiceImplTest {
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(1, "nginx", 2)));
         when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
-        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+        when(volumeMapper.selectVolumesByServiceIds(java.util.List.of(1))).thenReturn(Collections.emptyList());
 
         stubNamespace();
         Deps deps = stubDeployments();
@@ -154,7 +154,7 @@ class KubernetesStackServiceImplTest {
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(1, "nginx", 1)));
         when(portMapper.selectPortsByServiceId(1)).thenReturn(Collections.emptyList());
-        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null))
+        when(volumeMapper.selectVolumesByServiceIds(java.util.List.of(1)))
                 .thenReturn(List.of(VolumeDo.builder().stackId(1).serviceId(1)
                         .volumeName("data").size(5).mountPath("/data").build()));
 
@@ -169,9 +169,9 @@ class KubernetesStackServiceImplTest {
         verify(deps.nsOp, atLeastOnce()).resource(captor.capture());
         Deployment deployment = captor.getValue();
         assertThat(deployment.getSpec().getTemplate().getSpec().getVolumes().get(0).getName())
-                .isEqualTo("nginx-data");
+                .isEqualTo("data");
         assertThat(deployment.getSpec().getTemplate().getSpec().getVolumes().get(0)
-                .getPersistentVolumeClaim().getClaimName()).isEqualTo("nginx-data");
+                .getPersistentVolumeClaim().getClaimName()).isEqualTo("data");
         assertThat(deployment.getSpec().getTemplate().getSpec().getContainers().get(0)
                 .getVolumeMounts().get(0).getMountPath()).isEqualTo("/data");
     }
@@ -241,7 +241,7 @@ class KubernetesStackServiceImplTest {
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(ServiceDo.builder().id(1).stackId(1).serviceName("nginx")
                         .replicas(1).image("nginx:latest").serviceType(serviceType).build()));
-        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+        when(volumeMapper.selectVolumesByServiceIds(java.util.List.of(1))).thenReturn(Collections.emptyList());
         stubNamespace();
         stubDeployments();
         stubPvc();
@@ -302,7 +302,7 @@ class KubernetesStackServiceImplTest {
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(1, "nginx", 1)));
         when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
-        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+        when(volumeMapper.selectVolumesByServiceIds(java.util.List.of(1))).thenReturn(Collections.emptyList());
 
         stubNamespace();
         stubDeployments();
@@ -336,7 +336,7 @@ class KubernetesStackServiceImplTest {
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(1, "nginx", 1)));
         when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
-        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+        when(volumeMapper.selectVolumesByServiceIds(java.util.List.of(1))).thenReturn(Collections.emptyList());
 
         stubNamespace();
         stubDeployments();
@@ -371,7 +371,7 @@ class KubernetesStackServiceImplTest {
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(1, "worker", 1)));
         when(portMapper.selectPortsByServiceId(1)).thenReturn(Collections.emptyList());
-        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+        when(volumeMapper.selectVolumesByServiceIds(java.util.List.of(1))).thenReturn(Collections.emptyList());
 
         stubNamespace();
         Deps deps = stubDeployments();
@@ -391,7 +391,7 @@ class KubernetesStackServiceImplTest {
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(1, "nginx", 1)));
         when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
-        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+        when(volumeMapper.selectVolumesByServiceIds(java.util.List.of(1))).thenReturn(Collections.emptyList());
 
         stubNamespace();
         stubDeployments();

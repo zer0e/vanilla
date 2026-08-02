@@ -132,7 +132,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
         try {
             for (ServiceDo service : services) {
                 List<PortDo> ports = portMapper.selectPortsByServiceId(service.getId());
-                List<VolumeDo> volumes = volumeMapper.selectVolumesByServiceIdAndSearch(service.getId(), null);
+                List<VolumeDo> volumes = volumeMapper.selectVolumesByServiceIds(List.of(service.getId()));
                 ensurePvc(client, namespace, stack.getId(), service, volumes);
                 upsertService(client, namespace, stack.getId(), service, ports);
                 upsertDeployment(client, namespace, stack.getId(), service, ports, volumes);
@@ -289,7 +289,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
                 .withEnv(buildEnvVars(service))
                 .withPorts(buildContainerPorts(ports))
                 .withResources(buildResources(service))
-                .withVolumeMounts(buildVolumeMounts(service.getServiceName(), volumes))
+                .withVolumeMounts(buildVolumeMounts(volumes))
                 .withReadinessProbe(buildProbe(service))
                 .withLivenessProbe(buildProbe(service));
         if (!CollectionUtils.isEmpty(command)) {
@@ -311,7 +311,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
                         .withNewMetadata().withLabels(labels).endMetadata()
                         .withSpec(new PodSpecBuilder()
                                 .withContainers(container)
-                                .withVolumes(buildVolumes(service.getServiceName(), volumes))
+                                .withVolumes(buildVolumes(volumes))
                                 .build())
                         .build())
                 .endSpec()
@@ -472,7 +472,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
             return;
         }
         for (VolumeDo volume : volumes) {
-            String name = pvcName(service.getServiceName(), volume);
+            String name = pvcName(volume);
             if (client.persistentVolumeClaims().inNamespace(namespace).withName(name).get() != null) {
                 continue;
             }
@@ -693,12 +693,12 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
         return new ResourceRequirementsBuilder().withRequests(requests).withLimits(limits).build();
     }
 
-    private List<Volume> buildVolumes(String serviceName, List<VolumeDo> volumes) {
+    private List<Volume> buildVolumes(List<VolumeDo> volumes) {
         if (CollectionUtils.isEmpty(volumes)) {
             return Collections.emptyList();
         }
         return volumes.stream().map(v -> {
-            String name = pvcName(serviceName, v);
+            String name = pvcName(v);
             return new VolumeBuilder()
                     .withName(name)
                     .withNewPersistentVolumeClaim().withClaimName(name).endPersistentVolumeClaim()
@@ -706,13 +706,13 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
         }).toList();
     }
 
-    private List<VolumeMount> buildVolumeMounts(String serviceName, List<VolumeDo> volumes) {
+    private List<VolumeMount> buildVolumeMounts(List<VolumeDo> volumes) {
         if (CollectionUtils.isEmpty(volumes)) {
             return Collections.emptyList();
         }
         return volumes.stream()
                 .map(v -> new VolumeMountBuilder()
-                        .withName(pvcName(serviceName, v))
+                        .withName(pvcName(v))
                         .withMountPath(v.getMountPath())
                         .build())
                 .toList();
@@ -764,10 +764,10 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     }
 
     /**
-     * PVC 名 = 服务名-卷名（卷名仅按服务唯一，加服务名前缀保证栈内命名空间不冲突）
+     * PVC 名 = 卷名（卷为栈级独立资源，栈内卷名唯一，命名空间=栈名故不冲突、可被多个服务共享挂载）
      */
-    private String pvcName(String serviceName, VolumeDo volume) {
-        return sanitize(serviceName + "-" + volume.getVolumeName());
+    private String pvcName(VolumeDo volume) {
+        return sanitize(volume.getVolumeName());
     }
 
     /**

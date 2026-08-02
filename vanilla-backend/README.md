@@ -11,7 +11,7 @@
   - 栈（Stack）：集群下的逻辑分组，含成员授权
   - 服务（Service）：镜像、副本数、CPU/内存限制、命令、环境变量（JSON 存储）
   - 端口（Port）：服务端口声明（协议 + 端口），部署时映射到宿主
-  - 卷（Volume）：栈级卷声明（名称 + 大小）
+  - 卷（Volume）：**栈级独立资源**（独立页维护，服务按 id 引用挂载，删除服务不影响卷）
 - **部署生命周期**（Docker / K8s 双运行时）
   - Docker：拉取镜像 → 按副本数创建并启动容器（env / 端口映射 / 资源限制 / 标签 / HEALTHCHECK）
   - K8s：栈 → `vanilla` 命名空间下 Deployment + Service（NodePort），卷 → PVC
@@ -214,7 +214,7 @@ K8S 类型集群的栈操作由 `KubernetesStackServiceImpl` 承担（`DeploySer
 | 更新策略 | Deployment strategy | `Recreate` / `RollingUpdate`（K8s 原生处理滚动与扩缩容） |
 | 健康检查 | readiness + liveness exec 探针 | 与 Docker HEALTHCHECK 参数一致（`sh -c '<healthCheckCmd>'`） |
 | 端口 | Service（类型可由服务 `serviceType` 显式指定：ClusterIP / NodePort / LoadBalancer，留空自动） | 自动/NodePort：声明端口 ≤ 2767 时附加 NodePort 30000+端口，超出交给 k8s 分配 |
-| 卷 | `PersistentVolumeClaim`（名 `{服务名}-{卷名}`，ReadWriteOnce） | 下架不删 PVC，与 Docker named volume 语义一致 |
+| 卷 | `PersistentVolumeClaim`（名 = **卷名**，ReadWriteOnce，可被多个服务共享挂载） | 下架不删 PVC，与 Docker named volume 语义一致 |
 | 停止 | Deployment scale=0 | 状态查询反映为 STOPPED（Deployment 仍存在） |
 | 下架 | 删除 Deployment + Service（保留 PVC） | — |
 | 日志 | 按标签选 Pod → `getLog()` 截取最近 N 行 | 多副本按 Pod 名排序取指定索引 |

@@ -14,9 +14,6 @@ public class CreateVolumeDto {
     @NotNull(message = "栈id不能为空")
     private Integer stackId;
 
-    @NotNull(message = "服务id不能为空")
-    private Integer serviceId;
-
     @NotEmpty(message = "卷名称不能为空")
     private String volumeName;
 

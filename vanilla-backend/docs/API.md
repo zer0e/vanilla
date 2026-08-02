@@ -196,6 +196,7 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 | strategy | string | | 更新策略 |
 | envs | object[] | | 环境变量 `[{name, value}]`，JSON 列存储 |
 | serviceType | string | | K8s Service 类型：`ClusterIP` / `NodePort` / `LoadBalancer`，留空为**自动**（有端口即 NodePort，否则 ClusterIP） |
+| volumeIds | int[] | | 引用的栈级卷 id 列表（卷在卷管理页维护，删除服务不影响卷；K8s PVC 名 = 卷名） |
 
 > `serviceType` 仅影响 K8s 集群部署；Docker 集群忽略该字段。自动/显式 NodePort 时声明端口 ≤ 2767 固定映射 `30000+端口`，超出范围交给 k8s 自动分配。
 
@@ -255,23 +256,26 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 ## 5. 卷 Volume `/volume/api`
 
+> **卷是栈级独立资源**（不再挂靠服务），在独立页面维护；服务通过 `volumeIds` 引用并挂载。
+> 删除服务**不影响卷**；删除卷会同步清理服务引用。删除为物理删除（释放栈内卷名）。
+
 ### 5.1 创建卷 `POST /v1/create`
 
 **角色**：`ROLE_stack_{stackId}_stack_admin` / `member`
 
-请求体：`{stackId*, volumeName*, size?}`（size 单位 GB）
+请求体：`{stackId*, volumeName*, size?, mountPath?}`（size 单位 GB；mountPath 为容器内挂载路径）
 
 ### 5.2 修改卷 `POST /v1/update`
 
 **角色**：`ROLE_stack_{stackId}_stack_admin`
 
-请求体：`{id*, stackId*, size?}`
+请求体：`{id*, stackId*, size?, mountPath?}`（卷名创建后不可改）
 
 ### 5.3 删除卷 `POST /v1/delete`
 
 **角色**：`ROLE_stack_{stackId}_stack_admin`
 
-请求体：`{stackId*, id*}`
+请求体：`{stackId*, id*}`。物理删除并清理服务引用。
 
 ### 5.4 卷列表 `POST /v1/list`
 

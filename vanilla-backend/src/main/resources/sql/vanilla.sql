@@ -90,13 +90,13 @@ create table vanilla.t_port
     unique key uk_service_port (service_id, port)
 ) comment '端口表';
 
--- 卷（service 级，部署时挂载到容器）
+-- 卷（stack 级独立资源，服务通过 t_service_volume 引用并挂载）
 create table vanilla.t_volume
 (
     id          int auto_increment primary key,
     stack_id    int          not null,
-    service_id  int          not null comment '所属服务',
-    volume_name varchar(255) not null comment '卷名称',
+    service_id  int          null comment '兼容旧数据的所属服务；卷现为栈级资源',
+    volume_name varchar(255) not null comment '卷名称（栈内唯一）',
     size        int          null comment '卷大小 GB',
     mount_path  varchar(255) null comment '容器内挂载路径',
     create_user varchar(255) null,
@@ -106,8 +106,18 @@ create table vanilla.t_volume
     delete_time datetime     null,
     delete_user varchar(255) null,
     status      tinyint      not null default 0,
-    unique key uk_service_volume (service_id, volume_name)
+    unique key uk_stack_volume (stack_id, volume_name)
 ) comment '卷表';
+
+-- 服务引用卷（删除服务不影响卷；卷删除会同步清理引用）
+create table vanilla.t_service_volume
+(
+    id          int auto_increment primary key,
+    service_id  int      not null,
+    volume_id   int      not null,
+    create_time datetime null,
+    unique key uk_service_volume (service_id, volume_id)
+) comment '服务引用卷表';
 
 -- 用户
 create table vanilla.t_user

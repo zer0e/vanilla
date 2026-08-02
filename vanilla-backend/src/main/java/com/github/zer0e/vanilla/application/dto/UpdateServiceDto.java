@@ -58,5 +58,10 @@ public class UpdateServiceDto {
      */
     private String serviceType;
 
+    /**
+     * 引用的栈级卷 id 列表；null 表示不修改引用
+     */
+    private List<Integer> volumeIds;
+
     private List<Env> envs;
 }

@@ -1,5 +1,7 @@
 import request from './http'
 
+export const getVolumes = (data) => request.post('/volume/api/v1/list', data)
+
 export const createVolume = (data) => request.post('/volume/api/v1/create', data)
 
 export const updateVolume = (data) => request.post('/volume/api/v1/update', data)
