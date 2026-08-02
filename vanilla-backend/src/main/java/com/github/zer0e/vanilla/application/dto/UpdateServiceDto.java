@@ -1,5 +1,6 @@
 package com.github.zer0e.vanilla.application.dto;
 
+import com.github.zer0e.vanilla.domain.ContainerPort;
 import com.github.zer0e.vanilla.domain.Env;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -59,9 +60,9 @@ public class UpdateServiceDto {
     private List<Integer> volumeIds;
 
     /**
-     * 声明的端口列表；null 表示不修改端口（新增/移除端口在保存时合并同步）
+     * 容器/Pod 暴露端口；null 表示不修改
      */
-    private List<PortSpecDto> ports;
+    private List<ContainerPort> containerPorts;
 
     private List<Env> envs;
 }

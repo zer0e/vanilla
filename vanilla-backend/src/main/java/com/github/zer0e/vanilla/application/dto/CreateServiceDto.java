@@ -1,5 +1,6 @@
 package com.github.zer0e.vanilla.application.dto;
 
+import com.github.zer0e.vanilla.domain.ContainerPort;
 import com.github.zer0e.vanilla.domain.Env;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -58,9 +59,9 @@ public class CreateServiceDto {
     private List<Integer> volumeIds;
 
     /**
-     * 声明服务需暴露的端口（协议+端口；SVC 类型在「端口/SVC」页按端口配置）
+     * 容器/Pod 暴露端口（对应 K8s containerPort / Docker EXPOSE；与 SVC 相互独立）
      */
-    private List<PortSpecDto> ports;
+    private List<ContainerPort> containerPorts;
 
     private List<Env> envs;
 

@@ -3,6 +3,7 @@
 <mapper namespace="com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper">
 
     <resultMap id="ServiceDoResultMap" type="com.github.zer0e.vanilla.infrastructure.db.repository.ServiceDo">
+        <result column="container_ports" property="containerPorts" typeHandler="com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler"/>
         <result column="envs" property="envs" typeHandler="com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler"/>
     </resultMap>
 

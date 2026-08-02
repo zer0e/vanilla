@@ -136,7 +136,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
                 List<VolumeDo> volumes = volumeMapper.selectVolumesByServiceIds(List.of(service.getId()));
                 ensurePvc(client, namespace, stack.getId(), service, volumes);
                 upsertServices(client, namespace, stack.getId(), service, ports);
-                upsertDeployment(client, namespace, stack.getId(), service, ports, volumes);
+                upsertDeployment(client, namespace, stack.getId(), service, volumes);
                 log.info("k8s upsert deployment done, ns={}, stackId={}, service={}",
                         namespace, stack.getId(), service.getServiceName());
             }
@@ -282,7 +282,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     // ---------- 资源构建 ----------
 
     private void upsertDeployment(KubernetesClient client, String namespace, Integer stackId, ServiceDo service,
-                                  List<PortDo> ports, List<VolumeDo> volumes) {
+                                  List<VolumeDo> volumes) {
         Map<String, String> labels = deploymentLabels(stackId, service);
         String deploymentName = resourceName(service.getServiceName());
         List<String> command = commandTokens(service);
@@ -292,7 +292,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
                 .withName(deploymentName)
                 .withImage(service.getImage())
                 .withEnv(buildEnvVars(service))
-                .withPorts(buildContainerPorts(ports))
+                .withPorts(buildContainerPorts(service.getContainerPorts()))
                 .withResources(buildResources(service))
                 .withVolumeMounts(buildVolumeMounts(volumes))
                 .withReadinessProbe(buildProbe(service))
@@ -686,11 +686,11 @@ private String svcName(String serviceName, PortDo port) {
                 .toList();
     }
 
-    private List<ContainerPort> buildContainerPorts(List<PortDo> ports) {
-        if (CollectionUtils.isEmpty(ports)) {
+    private List<ContainerPort> buildContainerPorts(List<com.github.zer0e.vanilla.domain.ContainerPort> containerPorts) {
+        if (CollectionUtils.isEmpty(containerPorts)) {
             return Collections.emptyList();
         }
-        return ports.stream()
+        return containerPorts.stream()
                 .map(p -> new ContainerPortBuilder()
                         .withContainerPort(p.getPort())
                         .withProtocol(p.getProtocol() == null ? "TCP" : p.getProtocol().toUpperCase())

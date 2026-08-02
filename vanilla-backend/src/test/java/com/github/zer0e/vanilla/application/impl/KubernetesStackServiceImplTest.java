@@ -118,7 +118,10 @@ class KubernetesStackServiceImplTest {
         when(clusterMapper.selectById(1)).thenReturn(cluster());
         when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
-                .thenReturn(List.of(service(1, "nginx", 2)));
+                .thenReturn(List.of(ServiceDo.builder().id(1).stackId(1).serviceName("nginx")
+                        .replicas(2).image("nginx:latest")
+                        .containerPorts(List.of(new com.github.zer0e.vanilla.domain.ContainerPort("tcp", 80)))
+                        .build()));
         when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
         when(volumeMapper.selectVolumesByServiceIds(java.util.List.of(1))).thenReturn(Collections.emptyList());
 

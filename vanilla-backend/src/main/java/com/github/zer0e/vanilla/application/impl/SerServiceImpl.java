@@ -8,7 +8,6 @@ import com.github.zer0e.vanilla.application.dto.CreateHistoryDto;
 import com.github.zer0e.vanilla.application.dto.CreateServiceDto;
 import com.github.zer0e.vanilla.application.dto.DeleteServiceDto;
 import com.github.zer0e.vanilla.application.dto.GetServicesDto;
-import com.github.zer0e.vanilla.application.dto.PortSpecDto;
 import com.github.zer0e.vanilla.application.dto.UpdateServiceDto;
 import com.github.zer0e.vanilla.application.vo.ServiceVo;
 import com.github.zer0e.vanilla.common.Constants;
@@ -82,7 +81,6 @@ public class SerServiceImpl implements SerService {
         serviceMapper.insert(serviceDo);
         // 引用栈级卷 + 声明暴露端口
         replaceVolumeRefs(serviceDo.getId(), createServiceDto.getVolumeIds());
-        syncPorts(serviceDo.getStackId(), serviceDo.getId(), createServiceDto.getPorts());
         recordHistory(serviceDo.getStackId(), "创建服务 " + serviceDo.getServiceName() + "，镜像：" + serviceDo.getImage());
         return ServiceConverter.INSTANCE.toVo(serviceDo);
     }
@@ -105,10 +103,6 @@ public class SerServiceImpl implements SerService {
         // 卷引用：非 null 表示全量替换（卷本身保持不变）
         if (updateServiceDto.getVolumeIds() != null) {
             replaceVolumeRefs(serviceDo.getId(), updateServiceDto.getVolumeIds());
-        }
-        // 端口：非 null 表示合并同步声明（保留已配置 SVC 类型，移除未再声明的，补新增的）
-        if (updateServiceDto.getPorts() != null) {
-            syncPorts(serviceDo.getStackId(), serviceDo.getId(), updateServiceDto.getPorts());
         }
         recordHistory(serviceDo.getStackId(), "更新服务 " + serviceDo.getServiceName());
         return ServiceConverter.INSTANCE.toVo(serviceDo);
@@ -202,40 +196,6 @@ public class SerServiceImpl implements SerService {
         volume.setSize(volumeDo.getSize());
         volume.setMountPath(volumeDo.getMountPath());
         return volume;
-    }
-
-    /**
-     * 合并同步服务声明的端口：新增的插入（SVC 类型留空→自动），仍在声明中的保留其类型，
-     * 未再声明的物理删除（释放端口名，重部署会清理对应 SVC）
-     */
-    private void syncPorts(Integer stackId, Integer serviceId, List<PortSpecDto> portSpecs) {
-        List<PortDo> existing = portMapper.selectPortsByServiceId(serviceId);
-        List<PortSpecDto> specs = portSpecs == null ? Collections.emptyList()
-                : portSpecs.stream().filter(p -> p != null && p.getPort() != null)
-                        .distinct()  // PortSpecDto @Data equals → (protocol,port) 去重
-                        .collect(Collectors.toList());
-        for (PortDo portDo : existing) {
-            boolean keep = specs.stream().anyMatch(s -> Objects.equals(s.getPort(), portDo.getPort())
-                    && Objects.equals(s.getProtocol() == null ? "tcp" : s.getProtocol(), portDo.getProtocol()));
-            if (!keep) {
-                portMapper.deleteById(portDo.getId());
-            }
-        }
-        for (PortSpecDto spec : specs) {
-            boolean exist = existing.stream().anyMatch(p -> Objects.equals(p.getPort(), spec.getPort())
-                    && Objects.equals(p.getProtocol(), spec.getProtocol() == null ? "tcp" : spec.getProtocol()));
-            if (!exist) {
-                PortDo portDo = new PortDo();
-                portDo.setStackId(stackId);
-                portDo.setServiceId(serviceId);
-                portDo.setProtocol(spec.getProtocol() == null ? "tcp" : spec.getProtocol());
-                portDo.setPort(spec.getPort());
-                portDo.setStatus(DataStatus.EXIST.ordinal());
-                portDo.setCreateUser(SecurityUtil.getCurrentUserName());
-                portDo.setCreateTime(LocalDateTime.now());
-                portMapper.insert(portDo);
-            }
-        }
     }
 
     /**

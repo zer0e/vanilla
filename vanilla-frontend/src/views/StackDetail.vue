@@ -54,8 +54,8 @@
                 <div class="expanded">
                   <div class="expanded-section">
                     <div class="section-title">
-                      <span>端口</span>
-                      <span class="text-muted">在「端口访问」页维护每个端口的访问方式</span>
+                      <span>容器端口</span>
+                      <span class="text-muted">在「端口访问」页为容器端口创建 SVC</span>
                     </div>
                     <el-table :data="service.ports || []" size="small" border>
                       <el-table-column prop="protocol" label="协议" width="90" align="center">
@@ -63,7 +63,7 @@
                           <el-tag size="small">{{ row.protocol || 'tcp' }}</el-tag>
                         </template>
                       </el-table-column>
-                      <el-table-column prop="port" label="端口" width="120" align="center" />
+                      <el-table-column prop="port" label="容器端口" width="120" align="center" />
                       <el-table-column label="暴露方式" min-width="120" align="center">
                         <template #default="{ row }">
                           <el-tag size="small" :type="row.serviceType ? 'primary' : 'info'">
@@ -165,7 +165,10 @@
                 <el-button @click="handlePortSearch"><el-icon><Search /></el-icon></el-button>
               </template>
             </el-input>
-            <span class="text-muted">端口在服务的「暴露端口」中声明，此处仅配置各端口的访问方式</span>
+            <el-button type="primary" @click="openPortDialog()">
+              <el-icon><Plus /></el-icon>&nbsp;新建 SVC
+            </el-button>
+            <span class="text-muted">在服务「容器端口」基础上创建 SVC，按端口配置访问方式</span>
           </div>
 
           <el-table v-loading="portsLoading" :data="ports" stripe>
@@ -175,7 +178,7 @@
                 <el-tag size="small">{{ row.protocol || 'tcp' }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="port" label="端口" width="110" align="center" />
+            <el-table-column prop="port" label="容器端口" width="120" align="center" />
             <el-table-column label="暴露方式" min-width="120" align="center">
               <template #default="{ row }">
                 <el-tag size="small" :type="row.serviceType ? 'primary' : 'info'">
@@ -758,7 +761,7 @@ function defaultServiceForm() {
     strategy: 'Recreate',
     envs: [],
     volumeIds: [],
-    ports: []
+    containerPorts: []
   }
 }
 
@@ -780,7 +783,7 @@ const openServiceDialog = (row) => {
       strategy: row.strategy || 'Recreate',
       envs: (row.envs || []).map((e) => ({ ...e })),
       volumeIds: (row.volumes || []).map((v) => v.id),
-      ports: (row.ports || []).map((p) => ({ protocol: p.protocol || 'tcp', port: p.port }))
+      containerPorts: (row.containerPorts || []).map((p) => ({ protocol: p.protocol || 'tcp', port: p.port }))
     }
   } else {
     serviceForm.value = defaultServiceForm()
@@ -804,7 +807,7 @@ const saveService = () => {
       const payload = {
         ...serviceForm.value,
         envs: serviceForm.value.envs.filter((e) => e.name || e.value),
-        ports: serviceForm.value.ports
+        containerPorts: serviceForm.value.containerPorts
           .filter((p) => p.port)
           .map((p) => ({ protocol: p.protocol || 'tcp', port: p.port }))
       }
@@ -897,7 +900,7 @@ const loadPorts = async () => {
 }
 
 const addServicePort = () => {
-  serviceForm.value.ports.push({ protocol: 'tcp', port: undefined })
+  serviceForm.value.containerPorts.push({ protocol: 'tcp', port: undefined })
 }
 
 const portFilterService = ref(null)
@@ -916,16 +919,24 @@ const handlePortSizeChange = () => {
   loadPorts()
 }
 
+const portContainerOptions = computed(() => {
+  const svc = services.value.find((x) => x.id === portForm.value.serviceId)
+  return svc?.containerPorts || []
+})
+
 const openPortDialog = (port) => {
-  if (!port) return
-  portForm.value = {
-    id: port.id,
-    stackId,
-    serviceId: port.serviceId,
-    serviceName: port.serviceName,
-    protocol: port.protocol || 'tcp',
-    port: port.port,
-    serviceType: port.serviceType || ''
+  if (port) {
+    portForm.value = {
+      id: port.id,
+      stackId,
+      serviceId: port.serviceId,
+      serviceName: port.serviceName,
+      protocol: port.protocol || 'tcp',
+      port: port.port,
+      serviceType: port.serviceType || ''
+    }
+  } else {
+    portForm.value = defaultPortForm()
   }
   portDialogVisible.value = true
 }
@@ -937,10 +948,10 @@ const savePort = () => {
     try {
       if (portForm.value.id) {
         await updatePort({ ...portForm.value })
-        ElMessage.success('端口已更新')
+        ElMessage.success('SVC 已更新')
       } else {
         await createPort({ ...portForm.value })
-        ElMessage.success('端口已暴露')
+        ElMessage.success('SVC 已创建')
       }
       portDialogVisible.value = false
       await loadPorts()

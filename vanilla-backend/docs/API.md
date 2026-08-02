@@ -196,9 +196,9 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 | strategy | string | | 更新策略 |
 | envs | object[] | | 环境变量 `[{name, value}]`，JSON 列存储 |
 | volumeIds | int[] | | 引用的栈级卷 id 列表（卷在卷管理页维护，删除服务不影响卷；K8s PVC 名 = 卷名） |
-| ports | object[] | | **服务需暴露的端口声明** `[{protocol("tcp"默认/"udp"), port}]`，随服务创建/编辑保存合并同步（移除未再声明的端口，新增的 SVC 类型默认自动） |
+| containerPorts | object[] | | **容器/Pod 暴露端口** `[{protocol("tcp"默认/"udp"), port}]`（对应 K8s containerPort / Docker EXPOSE） |
 
-> 端口在**服务表单**中声明；「端口/SVC」页仅按端口配置 SVC 类型（ClusterIP/NodePort/LoadBalancer），删除端口会释放端口名并在重部署时清理对应 SVC。
+> 服务与 SVC **相互独立**：服务表单只声明容器监听的端口（containerPorts）；「端口访问」页在此之上创建 SVC 并配置访问方式。
 
 ### 3.2 修改服务 `POST /v1/update`
 
@@ -232,8 +232,8 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 请求体：`{stackId*, serviceId*, protocol?("tcp"默认/"udp"), port*, serviceType?}`
 
-同一服务下端口不可重复。`serviceType` 为该端口对应 **SVC** 的类型（`ClusterIP` / `NodePort` / `LoadBalancer`，留空 **自动**：端口 ≤ 2767 固定映射 `30000+端口` 的 NodePort，否则 ClusterIP）。
-**端口通常在服务创建/编辑表单中声明**（见 3.1 `ports`），「端口/SVC」页只用来配置各端口的 SVC 类型。**每个端口 = 一个 K8s Service**（名 `{服务名}-{端口}`）；Docker 集群忽略 `serviceType`（宿主端口映射不变）。删除端口为物理删除（释放端口名），重部署会清理对应 SVC。
+同一服务下端口不可重复。`port` 为该 SVC 引用的**容器端口**（见 3.1 `containerPorts`），`serviceType` 为访问方式（`ClusterIP` / `NodePort` / `LoadBalancer`，留空 **自动**：端口 ≤ 2767 映射 NodePort 30000+端口，否则 ClusterIP）。
+**端口访问页负责创建 SVC**：选择服务（POD）后引用其已声明的容器端口，配置访问方式即可。**每个 SVC = 一个 K8s Service**（名 `{服务名}-{端口}`，targetPort=容器端口）；Docker 集群忽略 `serviceType`（宿主端口映射=容器端口+副本偏移）。删除 SVC 为物理删除，重部署会清理对应 Service。
 
 ### 4.2 修改端口 `POST /v1/update`
 

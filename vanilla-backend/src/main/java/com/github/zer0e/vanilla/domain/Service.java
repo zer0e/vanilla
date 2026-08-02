@@ -45,5 +45,10 @@ public class Service {
      */
     private String strategy;
 
+    /**
+     * 容器/Pod 暴露端口（对应 K8s containerPort / Docker EXPOSE）
+     */
+    private List<ContainerPort> containerPorts;
+
     private List<Env> envs;
 }

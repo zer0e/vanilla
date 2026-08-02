@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
+import com.github.zer0e.vanilla.domain.ContainerPort;
 import com.github.zer0e.vanilla.domain.Env;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -59,6 +60,12 @@ public class ServiceDo extends Base {
      * 更新策略 RollingUpdate
      */
     private String strategy;
+
+    /**
+     * 容器/Pod 暴露端口（服务表单声明，对应 K8s containerPort / Docker EXPOSE）
+     */
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private List<ContainerPort> containerPorts;
 
     @TableField(typeHandler = JacksonTypeHandler.class)
     private List<Env> envs;
