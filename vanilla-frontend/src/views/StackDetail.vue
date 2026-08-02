@@ -54,8 +54,8 @@
                 <div class="expanded">
                   <div class="expanded-section">
                     <div class="section-title">
-                      <span>端口 / SVC</span>
-                      <span class="text-muted">在「端口/SVC」页维护，每个端口对应一个 Service</span>
+                      <span>端口</span>
+                      <span class="text-muted">在「端口访问」页维护每个端口的访问方式</span>
                     </div>
                     <el-table :data="service.ports || []" size="small" border>
                       <el-table-column prop="protocol" label="协议" width="90" align="center">
@@ -64,7 +64,7 @@
                         </template>
                       </el-table-column>
                       <el-table-column prop="port" label="端口" width="120" align="center" />
-                      <el-table-column label="SVC 类型" min-width="120" align="center">
+                      <el-table-column label="暴露方式" min-width="120" align="center">
                         <template #default="{ row }">
                           <el-tag size="small" :type="row.serviceType ? 'primary' : 'info'">
                             {{ row.serviceType || '自动' }}
@@ -141,8 +141,8 @@
           />
         </el-tab-pane>
 
-        <!-- 端口 / SVC（每个端口对应一个 K8s Service，类型在端口上声明） -->
-        <el-tab-pane label="端口/SVC" name="ports">
+        <!-- 端口访问（端口在服务表单声明，此处按端口配置访问方式） -->
+        <el-tab-pane label="端口访问" name="ports">
           <div class="toolbar">
             <el-select
               v-model="portFilterService"
@@ -165,7 +165,7 @@
                 <el-button @click="handlePortSearch"><el-icon><Search /></el-icon></el-button>
               </template>
             </el-input>
-            <span class="text-muted">端口在服务的「暴露端口」中声明，此处仅配置各端口的 SVC 类型</span>
+            <span class="text-muted">端口在服务的「暴露端口」中声明，此处仅配置各端口的访问方式</span>
           </div>
 
           <el-table v-loading="portsLoading" :data="ports" stripe>
@@ -176,7 +176,7 @@
               </template>
             </el-table-column>
             <el-table-column prop="port" label="端口" width="110" align="center" />
-            <el-table-column label="SVC 类型" min-width="120" align="center">
+            <el-table-column label="暴露方式" min-width="120" align="center">
               <template #default="{ row }">
                 <el-tag size="small" :type="row.serviceType ? 'primary' : 'info'">
                   {{ row.serviceType || '自动' }}
@@ -402,7 +402,7 @@
               <el-button size="small" type="primary" plain @click="addServicePort">
                 添加端口
               </el-button>
-              <span class="text-muted">SVC 类型在「端口/SVC」页逐端口配置</span>
+              <span class="text-muted">访问方式在「端口访问」页逐端口配置</span>
             </div>
           </div>
         </el-form-item>
@@ -413,10 +413,10 @@
       </template>
     </el-dialog>
 
-    <!-- 端口 / SVC 对话框 -->
+    <!-- 端口访问方式对话框 -->
     <el-dialog
       v-model="portDialogVisible"
-      title="配置 SVC 类型"
+      title="配置访问方式"
       width="460px"
       destroy-on-close
     >
@@ -430,7 +430,7 @@
         <el-form-item label="端口">
           <el-input :model-value="String(portForm.port || '')" disabled />
         </el-form-item>
-        <el-form-item label="SVC 类型">
+        <el-form-item label="访问方式">
           <el-select v-model="portForm.serviceType" style="width: 100%">
             <el-option label="自动（≤2767 为 NodePort，否则 ClusterIP）" value="" />
             <el-option label="ClusterIP（仅集群内访问）" value="ClusterIP" />
@@ -845,7 +845,7 @@ const handleDeleteService = (row) => {
     .catch(() => {})
 }
 
-// ---------- 端口 / SVC（栈级管理，每个端口对应一个 K8s Service，类型在端口上声明） ----------
+// ---------- 端口访问（端口在服务表单声明，此处仅配置访问方式） ----------
 const portsLoading = ref(false)
 const ports = ref([])
 const portCount = ref(0)
