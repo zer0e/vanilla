@@ -2,7 +2,7 @@
 
 基于 Docker / K8s 的服务部署管理平台后端。以「集群 → 栈 → 服务」为模型组织容器编排资源，提供资源 CRUD、基于角色的权限控制（RBAC），并通过 docker-java 直连 Docker daemon、fabric8 直连 Kubernetes API 完成**部署 / 状态查询 / 停止 / 下架 / 日志**的全生命周期管理。
 
-> **Docker 与 K8s 双运行时**：按集群 `type`（DOCKER / K8S）自动分流——Docker 走容器/标签模型（已验证 e2e），K8s 走 Deployment/Service/PVC 模型（资源映射与状态语义有单元测试固化，真机验证步骤见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) 第 9 节）。
+> **Docker 与 K8s 双运行时**：按集群 `type`（DOCKER / K8S）自动分流——Docker 走容器/标签模型、K8s 走 Deployment/Service/PVC 模型（一栈一命名空间，命名空间 = 栈名）。两套链路均有单元测试固化，并分别完成真机验证（Docker 云主机、K8s 本地 OrbStack 集群，见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) 第 8/9 节）。
 
 ## 功能特性
 
@@ -10,15 +10,16 @@
   - 集群（Cluster）：Docker 连接信息（endpoint、TLS、证书）管理，per-cluster 连接缓存
   - 栈（Stack）：集群下的逻辑分组，含成员授权
   - 服务（Service）：镜像、副本数、CPU/内存限制、命令、环境变量（JSON 存储）
-  - 端口（Port）：服务端口声明（协议 + 端口），部署时映射到宿主
+  - 端口访问 / SVC（Port）：服务在表单中声明**容器端口**（containerPorts），独立的「端口访问」页创建 SVC 并配置访问方式（ClusterIP / NodePort / LoadBalancer 或自动；Docker 上即宿主端口映射）
   - 卷（Volume）：**栈级独立资源**（独立页维护，服务按 id 引用挂载，删除服务不影响卷）
 - **部署生命周期**（Docker / K8s 双运行时）
   - Docker：拉取镜像 → 按副本数创建并启动容器（env / 端口映射 / 资源限制 / 标签 / HEALTHCHECK）
-  - K8s：栈 → `vanilla` 命名空间下 Deployment + Service（NodePort），卷 → PVC
+  - K8s：栈 → **栈命名空间**（命名空间 = 栈名）下 Deployment + Service + PVC；SVC 类型来自「端口访问」配置
   - 状态查询：Docker 按容器标签、K8s 按 Deployment readyReplicas 统计 RUNNING / STOPPED / PARTIAL / NONE，含**健康数 healthyCount**
   - 停止 / 下架：幂等操作，部署前自动清理同栈旧资源；K8s 下架保留 PVC
   - **容器日志**：按栈 + 服务 + 副本索引查看最近 N 行（stdout+stderr）
   - 部署前**宿主端口全局预校验**（Docker）、冲突快速失败；中途失败自动回滚清理
+  - **部署预览**（K8s）：`POST /stack/api/v1/preview` 返回将创建的 Namespace/Deployment/Service/PVC YAML，前端在部署对话框先预览确认再执行
 - **RBAC 鉴权**：`admin`（全局）→ `cluster_admin / cluster_user`（集群级）→ `stack_admin / stack_member / stack_readonly`（栈级）
 - **用户管理**：用户 CRUD + 角色绑定（全局/集群/栈作用域），变更即时失效缓存
 - **更新策略**：`Recreate`（默认，先删后建）与 `RollingUpdate`（逐副本替换，其余副本持续服务；副本数变化时退化为全量重建）
@@ -148,16 +149,16 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"clusterName":"docker-1","type":"DOCKER","endpoint":"unix:///var/run/docker.sock","tlsVerify":false}'
 
-# 创建栈 -> 创建服务 -> 添加端口 -> 部署
+# 创建栈 -> 创建服务（声明容器端口）-> 创建端口访问 SVC -> 部署
 curl -X POST http://localhost:8080/vanilla/stack/api/v1/create \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"clusterId":1,"stackName":"web"}'
 curl -X POST http://localhost:8080/vanilla/service/api/v1/create \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
-  -d '{"stackId":1,"serviceName":"nginx","image":"nginx:latest","replicas":1,"cpu":512,"memory":128}'
+  -d '{"stackId":1,"serviceName":"nginx","image":"nginx:latest","replicas":1,"cpu":512,"memory":128,"containerPorts":[{"protocol":"tcp","port":80}]}'
 curl -X POST http://localhost:8080/vanilla/port/api/v1/create \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
-  -d '{"stackId":1,"serviceId":1,"protocol":"tcp","port":80}'
+  -d '{"stackId":1,"serviceId":1,"protocol":"tcp","port":80,"serviceType":""}'
 curl -X POST http://localhost:8080/vanilla/stack/api/v1/deploy \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"stackId":1}'
@@ -179,6 +180,7 @@ curl -X POST http://localhost:8080/vanilla/stack/api/v1/deploy \
 | | `POST /stack/api/v1/delete` | 删除栈 |
 | | `POST /stack/api/v1/list` | 分页查询栈 |
 | | `POST /stack/api/v1/deploy` | **部署栈到集群** |
+| | `POST /stack/api/v1/preview` | **部署预览：K8s 返回将创建资源的 YAML** |
 | | `POST /stack/api/v1/status` | **查询栈运行状态** |
 | | `POST /stack/api/v1/stop` | **停止栈** |
 | | `POST /stack/api/v1/remove` | **下架栈（停+删容器）** |
@@ -186,11 +188,11 @@ curl -X POST http://localhost:8080/vanilla/stack/api/v1/deploy \
 | 服务 | `POST /service/api/v1/create` | 创建服务 |
 | | `POST /service/api/v1/update` | 修改服务 |
 | | `POST /service/api/v1/delete` | 删除服务 |
-| | `POST /service/api/v1/list` | 分页查询服务（含关联端口/卷） |
-| 端口 | `POST /port/api/v1/create` | 添加端口 |
-| | `POST /port/api/v1/update` | 修改端口 |
-| | `POST /port/api/v1/delete` | 删除端口 |
-| | `POST /port/api/v1/list` | 分页查询端口 |
+| | `POST /service/api/v1/list` | 分页查询服务（含关联卷） |
+| 端口访问 | `POST /port/api/v1/create` | 创建 SVC（引用容器端口 + 访问方式） |
+| | `POST /port/api/v1/update` | 修改 SVC |
+| | `POST /port/api/v1/delete` | 删除 SVC |
+| | `POST /port/api/v1/list` | 分页查询 SVC |
 | 卷 | `POST /volume/api/v1/create` | 创建卷 |
 | | `POST /volume/api/v1/update` | 修改卷 |
 | | `POST /volume/api/v1/delete` | 删除卷 |
@@ -205,7 +207,7 @@ curl -X POST http://localhost:8080/vanilla/stack/api/v1/deploy \
 
 ## K8s 运行时映射
 
-K8S 类型集群的栈操作由 `KubernetesStackServiceImpl` 承担（`DeployServiceImpl` 按集群类型自动分流），资源统一落在 `vanilla` 命名空间：
+K8S 类型集群的栈操作由 `KubernetesStackServiceImpl` 承担（`DeployServiceImpl` 按集群类型自动分流），**一栈一命名空间**，资源统一落在命名空间 = 栈名的命名空间中：
 
 | 平台概念 | K8s 资源 | 说明 |
 |---|---|---|
@@ -213,7 +215,7 @@ K8S 类型集群的栈操作由 `KubernetesStackServiceImpl` 承担（`DeploySer
 | 服务 | `Deployment`（名 = **服务名**，如 `nginx`；栈内唯一，命名空间隔离不跨栈冲突） | 副本数、镜像、env、容器端口、资源限制（CPU shares→m、内存 Mi） |
 | 更新策略 | Deployment strategy | `Recreate` / `RollingUpdate`（K8s 原生处理滚动与扩缩容） |
 | 健康检查 | readiness + liveness exec 探针 | 与 Docker HEALTHCHECK 参数一致（`sh -c '<healthCheckCmd>'`） |
-| 端口 | Service（类型可由服务 `serviceType` 显式指定：ClusterIP / NodePort / LoadBalancer，留空自动） | 自动/NodePort：声明端口 ≤ 2767 时附加 NodePort 30000+端口，超出交给 k8s 分配 |
+| 端口 | Service（「端口访问」页创建 SVC，`serviceType`：ClusterIP / NodePort / LoadBalancer，留空自动） | 引用容器端口为 targetPort；自动/NodePort：端口 ≤ 2767 时附加 NodePort 30000+端口，超出交给 k8s 分配 |
 | 卷 | `PersistentVolumeClaim`（名 = **卷名**，ReadWriteOnce，可被多个服务共享挂载） | 下架不删 PVC，与 Docker named volume 语义一致 |
 | 停止 | Deployment scale=0 | 状态查询反映为 STOPPED（Deployment 仍存在） |
 | 下架 | 删除 Deployment + Service（保留 PVC） | — |
@@ -244,5 +246,5 @@ K8S 类型集群的栈操作由 `KubernetesStackServiceImpl` 承担（`DeploySer
 
 ## 测试验证
 
-- **单元测试**：`DeployServiceImplTest`（29 个用例）+ `KubernetesStackServiceImplTest`（9 个用例，Mockito）。Docker 侧锁住端口绑定写入 HostConfig、宿主端口跨服务冲突预校验、容器命名、状态映射、失败回滚、Recreate 先删后建、RollingUpdate 逐副本替换、容器日志选择与读取、健康检查 HEALTHCHECK 构建与健康统计；K8s 侧锁住集群类型识别、Deployment/Service/PVC 资源映射、readyReplicas 状态语义（RUNNING/PARTIAL/STOPPED/NONE）、停止 scale=0、下架保留 PVC、日志按副本截取。运行：`./mvnw test`（无需外部依赖，Spring 上下文测试已标注 `@Disabled`）。
-- **端到端验证**：已在云主机（Alibaba Cloud Linux 4 + Docker 24.0.9 + MySQL 8.0 + Redis 7.2）跑通集群/栈/服务/端口/卷 CRUD、RBAC、部署→状态→停止→重新部署→下架、多副本（端口偏移）与多服务场景。回归测试中发现的端口映射丢失、多副本端口冲突、软删除过滤等缺陷均已修复并固化为测试。
+- **单元测试**（52 个，`./mvnw test` 免外部依赖可离线运行；另有 1 个 Spring 上下文测试标注 `@Disabled`）：`DeployServiceImplTest`（26 个）+ `KubernetesStackServiceImplTest`（20 个，Mockito）+ `JwtTokenProviderTest`（3 个）+ `ClusterCertMaterializerTest`（3 个）。Docker 侧锁住端口绑定写入 HostConfig、宿主端口跨服务冲突预校验、容器命名、状态映射、失败回滚、Recreate 先删后建、RollingUpdate 逐副本替换、容器日志选择与读取、健康检查 HEALTHCHECK 构建与健康统计；K8s 侧锁住集群类型识别、Deployment/Service/PVC 资源映射、readyReplicas 状态语义（RUNNING/PARTIAL/STOPPED/NONE）、停止 scale=0、下架保留 PVC、日志按副本截取；另含 JWT 生成/解析/过期与集群证书落盘两种命名方案的用例。
+- **端到端验证**：Docker 链路已在云主机（Alibaba Cloud Linux 4 + Docker 24.0.9 + MySQL 8.0 + Redis 7.2）跑通集群/栈/服务/端口/卷 CRUD、RBAC、部署→状态→停止→重新部署→下架、多副本（端口偏移）与多服务场景；K8s 链路已在本机 OrbStack Kubernetes 集群完成 e2e（部署/状态/健康/日志/下架与部署预览）。回归测试中发现的端口映射丢失、多副本端口冲突、软删除过滤等缺陷均已修复并固化为测试。

@@ -204,13 +204,13 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 **角色**：`ROLE_stack_{stackId}_stack_admin`
 
-请求体：`{id*, stackId*, image*, replicas?, command?, args?, cpu?, memory?, hostname?, terminationGracePeriodSeconds?, strategy?, envs?}`
+请求体：`{id*, stackId*, image*, replicas?, command?, args?, cpu?, memory?, hostname?, terminationGracePeriodSeconds?, healthCheckCmd?, strategy?, volumeIds?, containerPorts?, envs?}`
 
-> 注意 `image` 为必填校验字段。
+> 注意 `image` 为必填校验字段；`volumeIds` 非 null 时全量替换卷引用（卷本身不变），`containerPorts` 全量替换容器端口声明。
 
 ### 3.3 删除服务 `POST /v1/delete`
 
-**角色**：`ROLE_stack_{stackId}_stack_admin`。**物理删除**：连同该服务的端口/卷一起删除，并**释放栈内服务名**（唯一键），允许同名服务重新创建。
+**角色**：`ROLE_stack_{stackId}_stack_admin`。**物理删除**：连同该服务的端口访问（SVC）一起删除，并解除卷引用（**卷本身作为栈级资源保留**）；**释放栈内服务名**（唯一键），允许同名服务重新创建。
 
 请求体：`{stackId*, serviceId*}`（注意是 `serviceId`）
 
@@ -220,34 +220,36 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 请求体：`{stackId*, page?, size?, search?}`
 
-响应中每个服务附带 `ports[]` 与 `volumes[]` 关联数据。
+响应中每个服务附带 `volumes[]` 关联数据（SVC 端口访问已独立到第 4 节接口，不再内嵌）。
 
 ---
 
-## 4. 端口 Port `/port/api`
+## 4. 端口访问 SVC `/port/api`
 
-### 4.1 创建端口 `POST /v1/create`
+> 「端口访问」页创建 SVC：选择服务（POD）后**引用其已声明的容器端口**（见 3.1 `containerPorts`）并配置访问方式；**协议直接取自容器端口声明，前端自动映射，无需手选**。
+> **每个 SVC = 一个 K8s Service**（名 `{服务名}-{端口}`，targetPort=容器端口）；Docker 集群忽略 `serviceType`（宿主端口映射 = 容器端口 + 副本偏移）。删除 SVC 为物理删除，重部署会清理对应 K8s Service。
+
+### 4.1 创建 SVC `POST /v1/create`
 
 **角色**：`ROLE_stack_{stackId}_stack_admin` / `member`
 
 请求体：`{stackId*, serviceId*, protocol?("tcp"默认/"udp"), port*, serviceType?}`
 
-同一服务下端口不可重复。`port` 为该 SVC 引用的**容器端口**（见 3.1 `containerPorts`），`serviceType` 为访问方式（`ClusterIP` / `NodePort` / `LoadBalancer`，留空 **自动**：端口 ≤ 2767 映射 NodePort 30000+端口，否则 ClusterIP）。
-**端口访问页负责创建 SVC**：选择服务（POD）后引用其已声明的容器端口，配置访问方式即可。**每个 SVC = 一个 K8s Service**（名 `{服务名}-{端口}`，targetPort=容器端口）；Docker 集群忽略 `serviceType`（宿主端口映射=容器端口+副本偏移）。删除 SVC 为物理删除，重部署会清理对应 Service。
+同一服务下容器端口不可重复引用。`port` 为引用的容器端口编号，`serviceType` 为访问方式（`ClusterIP` / `NodePort` / `LoadBalancer`，留空 **自动**：端口 ≤ 2767 映射 NodePort 30000+端口，否则 ClusterIP）。
 
-### 4.2 修改端口 `POST /v1/update`
+### 4.2 修改 SVC `POST /v1/update`
 
 **角色**：`ROLE_stack_{stackId}_stack_admin`
 
 请求体：`{id*, stackId*, serviceId*, protocol?, port*}`
 
-### 4.3 删除端口 `POST /v1/delete`
+### 4.3 删除 SVC `POST /v1/delete`
 
 **角色**：`ROLE_stack_{stackId}_stack_admin`
 
 请求体：`{id*, stackId*, serviceId*}`
 
-### 4.4 端口列表 `POST /v1/list`
+### 4.4 SVC 列表 `POST /v1/list`
 
 **角色**：`ROLE_stack_{stackId}_stack_admin` / `member` / `readonly`
 
@@ -350,6 +352,8 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 流程：**宿主端口全局预校验（Docker）** → 逐服务「拉镜像 → 按更新策略创建/替换容器（Docker）或 Deployment/Service/PVC（K8s）」→ 清理孤儿资源。失败自动回滚清理。
 
+> K8S 集群可在部署前先调用 `POST /stack/api/v1/preview`（见 8.2）预览将生成的资源 YAML。
+
 > **健康检查**：服务可配置 `healthCheckCmd`（如 `curl -f http://localhost:8080/health || exit 1`）。Docker 侧容器挂载 HEALTHCHECK（间隔 30s / 超时 10s / 重试 3 / 启动宽限 5s），K8s 侧生成 readiness + liveness exec 探针；状态接口返回 `healthyCount`。
 
 **更新策略**（`service.strategy`）：
@@ -384,7 +388,24 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 **容器标签**：`com.vanilla.stack_id`、`com.vanilla.service_id`（用于状态统计与清理）。
 
-### 8.2 查询状态 `POST /stack/api/v1/status`
+### 8.2 部署预览 `POST /stack/api/v1/preview`
+
+**角色**：`stack_admin`
+
+请求体：`{stackId*}`
+
+仅 **K8S** 集群支持（Docker 集群返回 `{supported: false}`）。返回 `DeployPreviewVo`：
+
+```json
+{
+  "supported": true,
+  "yaml": "apiVersion: v1\nkind: Namespace\nmetadata:\n  ...\n---\napiVersion: apps/v1\nkind: Deployment\n..."
+}
+```
+
+`yaml` 为部署将创建的 **Namespace + Service + Deployment + PVC** 清单（`---` 拼接），可直接 `kubectl apply -f` 落盘应用。**只读预演**，不产生任何资源变更。
+
+### 8.3 查询状态 `POST /stack/api/v1/status`
 
 **角色**：`stack_admin` / `member` / `readonly`
 
@@ -399,15 +420,15 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 | `PARTIAL` | 部分服务/副本运行 |
 | `NONE` | 无任何容器 |
 
-### 8.3 停止栈 `POST /stack/api/v1/stop`
+### 8.4 停止栈 `POST /stack/api/v1/stop`
 
 **角色**：`stack_admin`。停止栈下所有容器（不删除）。
 
-### 8.4 下架栈 `POST /stack/api/v1/remove`
+### 8.5 下架栈 `POST /stack/api/v1/remove`
 
 **角色**：`stack_admin`。删除栈下所有容器（含停止的）。
 
-### 8.5 查看容器日志 `POST /stack/api/v1/logs`
+### 8.6 查看容器日志 `POST /stack/api/v1/logs`
 
 **角色**：`stack_admin` / `member` / `readonly`
 

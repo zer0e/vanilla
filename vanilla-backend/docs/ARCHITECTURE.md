@@ -23,26 +23,29 @@ DO --MapStruct--> VO（出参）
 
 ---
 
-## 数据模型与软删除
+## 数据模型与删除语义
 
-所有主业务表（`t_cluster`、`t_stack`、`t_service`、`t_port`、`t_volume`）的 DO 继承 `Base`，包含统一的审计/软删除字段：
+所有主业务表的 DO 继承 `Base`，包含统一的审计字段与 `status`（0=存在，1=已删除）：
 
 ```
 create_user, create_time, modify_user, modify_time,
-delete_user, delete_time, status(0=存在, 1=已删除)
+delete_user, delete_time, status
 ```
 
-删除采用**软删除**：`status = 1` + 记录删除时间，列表查询显式过滤 `status = 0`。
+**删除语义按资源区分**：集群/栈为**软删除**（`status=1`，列表过滤），服务/端口访问（SVC）/卷为**物理删除**（直接 `deleteById`，释放栈内唯一键；删除服务会级联清 SVC 与卷引用，但**卷本身保留**）。
 
 **关联结构**：
 
 ```
-t_cluster 1 ── n t_stack 1 ── n t_service 1 ── n t_port
-                      │                │
-                      └── n t_volume    └── 冗余 stack_id（权限校验便捷）
+                         ┌── n t_service_volume（引用卷，物理删除）
+t_cluster 1 ── n t_stack 1 ── n t_service ──┤ n t_port（SVC：引用容器端口）
+                      │                    │
+                      └── n t_volume       └── container_ports JSON 列（服务声明）
 ```
 
-`t_service.envs` 使用 MySQL `JSON` 列 + MyBatis-Plus `JacksonTypeHandler` 序列化环境变量。
+- `t_service.container_ports`：MySQL `JSON` 列，存服务声明的容器/Pod 端口 `[{protocol, port}]`（K8s containerPort 来源）。
+- `t_service.envs`：MySQL `JSON` 列 + MyBatis-Plus `JacksonTypeHandler` 序列化环境变量。
+- `t_port`：端口访问（SVC）实体，`service_id + port` 唯一，`service_type` 存 K8s Service 类型。
 
 `t_user_role` 记录用户-角色-资源关联：`(user_id, role_id, stack_id?, cluster_id?)`。
 
@@ -139,13 +142,14 @@ deployStack(stackId)
 K8s 链路（`KubernetesClientFactory` 按 clusterId 缓存 `KubernetesClient`）：
 
 ```
-栈(kubernetes) → 命名空间=栈名（栈名集群内唯一）
-  ├─ 服务 → Deployment（标签 com.vanilla.stack_id / service_id 分组）
-  ├─ 端口 → Service（ClusterIP；声明端口 ≤ 2767 附加 NodePort 30000+端口）
-  ├─ 卷   → PVC（ReadWriteOnce；下架保留）
+栈(kubernetes) → 命名空间=栈名（栈名集群内唯一），资源名=服务名/卷名
+  ├─ 服务 → Deployment（container_ports → containerPort）
+  ├─ 端口 → 「端口访问」SVC → Service（serviceType：ClusterIP/NodePort/LoadBalancer，空=自动：端口≤2767 附 NodePort 30000+）
+  ├─ 卷   → PVC（名=卷名，ReadWriteOnce；下架保留）
   ├─ 健康 → readiness + liveness exec 探针（同 Docker HEALTHCHECK 参数）
   ├─ 停止 → scale=0；下架 → 删 Deployment+Service；日志 → Pod getLog() 截尾
-  └─ 状态 → readyReplicas → RUNNING/PARTIAL/STOPPED/NONE（缩放为 0 记 STOPPED）
+  ├─ 状态 → readyReplicas → RUNNING/PARTIAL/STOPPED/NONE（缩放为 0 记 STOPPED）
+  └─ 预览 → buildXxx 纯构建器 + Serialization.asYaml → 返回将创建的资源清单（NS/Deploy/SVC/PVC）
 ```
 
 ---

@@ -53,11 +53,11 @@ mysql -uroot -proot < src/main/resources/sql/vanilla.sql
 
 脚本创建 `vanilla` 库、全部表并 seed：
 
-- **11 张表**：`t_cluster`、`t_stack`、`t_service`、`t_port`、`t_volume`、`t_user`、`t_role`、`t_permission`、`t_role_permission`、`t_user_role`、`t_operation_history`
+- **12 张表**：`t_cluster`、`t_stack`、`t_service`、`t_port`、`t_volume`、`t_service_volume`（服务引用卷）、`t_user`、`t_role`、`t_permission`、`t_role_permission`、`t_user_role`、`t_operation_history`
 - **7 个角色**：`admin`、`user`、`cluster_admin`、`cluster_user`、`stack_admin`、`stack_member`、`stack_readonly`
 - **管理员账号**：`admin`（login_name，绑定 `admin` 角色）
 
-> 表结构含软删除审计字段与唯一约束（如 `t_stack.uk_cluster_stack` 永久占用栈名），已与 DO 实体对齐。
+> 表结构含软删除审计字段与唯一约束（如 `t_stack.uk_cluster_stack`）；集群/栈为软删除，服务/端口（SVC）/卷为**物理删除**并即时释放对应唯一键（如 `t_service.uk_stack_service` 允许同名服务重建）。已与 DO 实体对齐。
 
 > **已有库升级**：本版本 `t_service` 新增 `health_check_cmd` 列（健康检查命令）、`t_cluster` 新增证书存库三列、`t_user` 新增密码列（JWT 登录），存量库需执行：
 > ```sql
@@ -69,6 +69,15 @@ mysql -uroot -proot < src/main/resources/sql/vanilla.sql
 > -- 为存量 admin 设置默认密码 admin123（BCrypt 哈希，登录后请修改）
 > UPDATE vanilla.t_user SET password='$2a$10$FhdXj62bhe2bqtr/47dzK.vQRWEbMBtjvP0di7gEpM.z5dn3Ya7Wq'
 >   WHERE login_name='admin' AND password IS NULL;
+> -- 端口访问（SVC）新拆分：容器端口列 + 服务引用卷表
+> ALTER TABLE vanilla.t_service ADD COLUMN container_ports json NULL COMMENT '容器/Pod 暴露端口 [{protocol, port}]（服务表单声明，SVC 创建时引用）' AFTER health_check_cmd;
+> CREATE TABLE IF NOT EXISTS vanilla.t_service_volume (
+>   id int auto_increment primary key,
+>   service_id int not null,
+>   volume_id int not null,
+>   create_time datetime null,
+>   unique key uk_service_volume (service_id, volume_id)
+> ) comment '服务引用卷表';
 > ```
 
 ## 5. 配置
@@ -147,7 +156,7 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 # 创建集群自动授予 cluster_admin 并即时失效缓存，无需手动操作
 ```
 
-### 8.2 创建栈 / 服务 / 端口
+### 8.2 创建栈 / 服务 / 端口访问（SVC）
 
 ```bash
 curl -X POST http://localhost:8080/vanilla/stack/api/v1/create \
@@ -155,13 +164,15 @@ curl -X POST http://localhost:8080/vanilla/stack/api/v1/create \
   -d '{"clusterId":1,"stackName":"web"}'
 # 创建栈自动授予 stack_admin 并即时失效缓存，无需手动操作
 
+# 服务表单声明容器端口 containerPorts（协议 + 端口）
 curl -X POST http://localhost:8080/vanilla/service/api/v1/create \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
-  -d '{"stackId":1,"serviceName":"nginx","image":"nginx:latest","replicas":2,"cpu":512,"memory":128,"envs":[{"name":"ENV_TEST","value":"hello"}]}'
+  -d '{"stackId":1,"serviceName":"nginx","image":"nginx:latest","replicas":2,"cpu":512,"memory":128,"containerPorts":[{"protocol":"tcp","port":80}],"envs":[{"name":"ENV_TEST","value":"hello"}]}'
 
+# 端口访问（SVC）：引用容器端口并配置访问方式（空 serviceType = 自动）
 curl -X POST http://localhost:8080/vanilla/port/api/v1/create \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
-  -d '{"stackId":1,"serviceId":1,"protocol":"tcp","port":80}'
+  -d '{"stackId":1,"serviceId":1,"protocol":"tcp","port":80,"serviceType":""}'
 ```
 
 ### 8.3 部署与状态
@@ -191,16 +202,16 @@ curl -X POST .../stack/api/v1/status -d '{"stackId":1}'   # NONE
 curl -X POST http://localhost:8080/vanilla/history/api/v1/list \
   -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"stackId":1,"page":1,"size":20}'
-# 包含 创建栈/创建服务/添加端口/部署栈/停止栈/下架栈 等事件
+# 包含 创建栈/创建服务/创建端口访问/部署栈/停止栈/下架栈 等事件
 ```
 
 ## 9. K8s（Kubernetes）集群部署与验证
 
-> 平台已实现按集群 `type = K8S` 的部署链路（Deployment / Service / PVC / 探针 / 日志），资源映射与状态语义有单元测试固化。**Docker 链路已在真机跑通，K8s 链路本仓库未在真实集群完成 e2e**，以下为实机验证路径。
+> 平台已实现按集群 `type = K8S` 的部署链路（Deployment / Service / PVC / 探针 / 日志），资源映射与状态语义有单元测试固化，**并已在本机 OrbStack Kubernetes 集群（API Server `https://127.0.0.1:26443`）完成真机 e2e**：部署 → 状态 → 健康 → 日志 → 停止 → 重新部署 → 下架，以及部署前 YAML 预览。以下为验证路径。
 
 ### 9.1 准备
 
-- 一个可访问的 K8s 集群（API Server 地址，如 `https://<api-server>:6443`），账号具备 `vanilla` 命名空间的创建与部署权限（或预先创建该命名空间）。
+- 一个可访问的 K8s 集群（API Server 地址，如 `https://<api-server>:6443`）。平台采用**一栈一命名空间**（命名空间 = 栈名）并自动创建命名空间，故账号需具备**创建命名空间**与部署权限；无该权限时，需管理员预先创建同名命名空间。
 - 如需 TLS：`tlsVerify=true` 并在集群的 `dockerCertPath` 放置 `ca.crt` / `client.crt` / `client.key`（兼容 Docker 的 `ca.pem` / `cert.pem` / `key.pem` 命名）。
 
 ### 9.2 创建集群
@@ -217,12 +228,13 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 创建栈/服务/端口/卷（同第 8 节），然后：
 
 ```bash
+curl -X POST .../stack/api/v1/preview -d '{"stackId":1}'  # 部署预览：返回 Namespace/Deployment/Service/PVC 的 YAML
 curl -X POST .../stack/api/v1/deploy -d '{"stackId":1}'   # 创建 Deployment + Service + PVC
 curl -X POST .../stack/api/v1/status -d '{"stackId":1}'   # readyReplicas → RUNNING/PARTIAL；healthyCount
 curl -X POST .../stack/api/v1/logs  \
   -d '{"stackId":1,"serviceId":1,"replicaIndex":0,"tail":200}'   # Pod 日志
 
-kubectl -n <栈名> get deploy,svc,pvc   # 预期：nginx / 对应 Service(ClusterIP|NodePort) / PVC（命名空间=栈名）
+kubectl -n <栈名> get deploy,svc,pvc   # 预期：资源名=服务名；Service(ClusterIP|NodePort) / PVC（命名空间=栈名）
 # 声明端口 ≤ 2767 时宿主访问：NodePort = 30000 + 声明端口（如声明 80 → 30080）
 ```
 
@@ -235,7 +247,7 @@ kubectl -n <栈名> get deploy,svc,pvc   # 预期：nginx / 对应 Service(Clust
 | CPU | Docker CPU shares 按 m 近似映射（1024 = 1 vCPU），非精确对应 |
 | 宿主端口 | NodePort 受 30000–32767 限制，仅「声明端口 ≤ 2767」映射；多副本不再逐副本偏移（由集群分发） |
 | HTTP 同步等待 | 部署接口不阻塞等待滚动完成，就绪状态由 status/healthyCount 轮询体现 |
-| 命名空间 | 统一 `default`（代码常量 `K8S_NAMESPACE`），暂不可配置 |
+| 命名空间 | **命名空间 = 栈名**（栈名集群内唯一，自动创建）；资源名 = 服务名/卷名，命名空间隔离保证跨栈不冲突 |
 
 ## 10. 常见问题
 
@@ -243,7 +255,7 @@ kubectl -n <栈名> get deploy,svc,pvc   # 预期：nginx / 对应 Service(Clust
 |---|---|
 | 部署报 `Bind for 0.0.0.0:X failed` | 宿主端口被占用（如后端占用 8080），或服务间端口范围重叠；改用空闲端口，或调整服务端口配置 |
 | 部署报 `宿主端口 X 冲突` | 多副本端口偏移与其它服务端口重叠，部署前已拦截，调整端口即可 |
-| K8s 部署报无权限 | 运行账号需能在 `vanilla` 命名空间创建 Deployment/Service/PVC（或预先创建命名空间） |
+| K8s 部署报无权限 | 运行账号需能创建命名空间并在**栈命名空间**内创建 Deployment/Service/PVC（无权限时预先建好同名命名空间，见第 9 节） |
 | `No Permission` | 权限不足：`admin` 之外的用户缺少对应集群/栈角色，或集群/栈创建后角色缓存尚未自动失效（正常情况下会即时失效，仅异常时考虑 `DEL USER_INFO_<username>`） |
 | 镜像拉取超时 | Docker Hub 不可达，配置镜像加速（第 7 节） |
 | 中文乱码 | 终端编码问题，API 本身返回 UTF-8 JSON |
