@@ -209,7 +209,7 @@ K8S 类型集群的栈操作由 `KubernetesStackServiceImpl` 承担（`DeploySer
 | 服务 | `Deployment`（名 `vanilla-{stackId}-{serviceName}`） | 副本数、镜像、env、容器端口、资源限制（CPU shares→m、内存 Mi） |
 | 更新策略 | Deployment strategy | `Recreate` / `RollingUpdate`（K8s 原生处理滚动与扩缩容） |
 | 健康检查 | readiness + liveness exec 探针 | 与 Docker HEALTHCHECK 参数一致（`sh -c '<healthCheckCmd>'`） |
-| 端口 | Service（ClusterIP，声明端口 ≤ 2767 时附加 NodePort 30000+端口） | NodePort 即宿主访问地址（`nodePort = 30000 + 声明端口`） |
+| 端口 | Service（类型可由服务 `serviceType` 显式指定：ClusterIP / NodePort / LoadBalancer，留空自动） | 自动/NodePort：声明端口 ≤ 2767 时附加 NodePort 30000+端口，超出交给 k8s 分配 |
 | 卷 | `PersistentVolumeClaim`（名 `vanilla-{stackId}-{serviceId}-{volumeName}`，ReadWriteOnce） | 下架不删 PVC，与 Docker named volume 语义一致 |
 | 停止 | Deployment scale=0 | 状态查询反映为 STOPPED（Deployment 仍存在） |
 | 下架 | 删除 Deployment + Service（保留 PVC） | — |

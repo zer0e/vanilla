@@ -312,27 +312,43 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
             return;
         }
         Map<String, String> labels = deploymentLabels(stackId, service);
+        // K8s Service 类型：显式 serviceType 优先；空 = 自动（有 NodePort 需求则 NodePort，否则 ClusterIP）
+        String requestedType = normalizeServiceType(service.getServiceType());
+        boolean autoType = !StringUtils.hasText(requestedType);
         List<ServicePort> servicePorts = new ArrayList<>();
-        boolean exposeNodePort = false;
+        boolean nodePortRequested = false;
         for (PortDo port : ports) {
             int declared = port.getPort();
             ServicePortBuilder builder = new ServicePortBuilder()
                     .withPort(declared)
                     .withTargetPort(new IntOrString(declared))
                     .withProtocol(port.getProtocol() == null ? "TCP" : port.getProtocol().toUpperCase());
-            if (declared <= NODE_PORT_MAX_DECLARED) {
-                builder.withNodePort(NODE_PORT_BASE + declared);
-                exposeNodePort = true;
+            if (autoType) {
+                // 自动：声明端口 ≤ 2767 映射 NodePort 30000+端口
+                if (declared <= NODE_PORT_MAX_DECLARED) {
+                    builder.withNodePort(NODE_PORT_BASE + declared);
+                    nodePortRequested = true;
+                }
+            } else if ("NodePort".equals(requestedType)) {
+                // 显式 NodePort：≤2767 固定 30000+端口，超出范围交给 k8s 自动分配
+                nodePortRequested = true;
+                if (declared <= NODE_PORT_MAX_DECLARED) {
+                    builder.withNodePort(NODE_PORT_BASE + declared);
+                }
             }
             servicePorts.add(builder.build());
         }
+        String targetType = autoType
+                ? (nodePortRequested ? "NodePort" : "ClusterIP")
+                : requestedType;
+
         io.fabric8.kubernetes.api.model.Service serviceResource = new ServiceBuilder()
                 .withNewMetadata()
                 .withName(nameOf(stackId, service.getServiceName()))
                 .withLabels(labels)
                 .endMetadata()
                 .withNewSpec()
-                .withType(exposeNodePort ? "NodePort" : "ClusterIP")
+                .withType(targetType)
                 .withSelector(labels)
                 .withPorts(servicePorts)
                 .endSpec()
@@ -375,10 +391,28 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     }
 
     private boolean sameServicePort(ServicePort a, ServicePort b) {
+        // 任一侧未指定 NodePort（交给 k8s 自动分配）时不参与比较，避免每次重部署误判 spec 变化
+        boolean nodePortSame = a.getNodePort() == null || b.getNodePort() == null
+                || Objects.equals(a.getNodePort(), b.getNodePort());
         return Objects.equals(a.getPort(), b.getPort())
                 && Objects.equals(a.getProtocol(), b.getProtocol())
-                && Objects.equals(a.getNodePort(), b.getNodePort())
+                && nodePortSame
                 && Objects.equals(targetPortValue(a.getTargetPort()), targetPortValue(b.getTargetPort()));
+    }
+
+    /**
+     * 归一化 K8s Service 类型：ClusterIP / NodePort / LoadBalancer；无法识别返回空（走自动）
+     */
+    private String normalizeServiceType(String serviceType) {
+        if (!StringUtils.hasText(serviceType)) {
+            return null;
+        }
+        return switch (serviceType.trim().toLowerCase()) {
+            case "clusterip" -> "ClusterIP";
+            case "nodeport" -> "NodePort";
+            case "loadbalancer" -> "LoadBalancer";
+            default -> null;
+        };
     }
 
     private Integer targetPortValue(IntOrString targetPort) {

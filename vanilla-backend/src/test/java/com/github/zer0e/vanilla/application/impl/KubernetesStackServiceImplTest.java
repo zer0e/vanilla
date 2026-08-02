@@ -176,6 +176,66 @@ class KubernetesStackServiceImplTest {
                 .getVolumeMounts().get(0).getMountPath()).isEqualTo("/data");
     }
 
+    // ---- 自定义 Service 类型：ClusterIP / LoadBalancer / 大端口 NodePort ----
+
+    private void stubDeployBase(String serviceType) throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(ServiceDo.builder().id(1).stackId(1).serviceName("nginx")
+                        .replicas(1).image("nginx:latest").serviceType(serviceType).build()));
+        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+        stubNamespace();
+        stubDeployments();
+        stubPvc();
+    }
+
+    private Service captureCreatedService(Services s) {
+        ArgumentCaptor<Service> captor = ArgumentCaptor.forClass(Service.class);
+        verify(s.svcNsOp, atLeastOnce()).resource(captor.capture());
+        return captor.getValue();
+    }
+
+    @Test
+    void deployStack_explicitClusterIp_createsClusterIpServiceWithoutNodePort() throws Exception {
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
+        stubDeployBase("ClusterIP");
+        Services s = stubServicesList(Collections.emptyList());
+
+        kubeStackService.deployStack(new DeployStackDto(1));
+
+        Service svc = captureCreatedService(s);
+        assertThat(svc.getSpec().getType()).isEqualTo("ClusterIP");
+        // 显式 ClusterIP：即使声明端口 80 也不分配 NodePort
+        assertThat(svc.getSpec().getPorts().get(0).getNodePort()).isNull();
+    }
+
+    @Test
+    void deployStack_explicitLoadBalancer_createsLoadBalancerService() throws Exception {
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
+        stubDeployBase("LoadBalancer");
+        Services s = stubServicesList(Collections.emptyList());
+
+        kubeStackService.deployStack(new DeployStackDto(1));
+
+        assertThat(captureCreatedService(s).getSpec().getType()).isEqualTo("LoadBalancer");
+    }
+
+    @Test
+    void deployStack_explicitNodePortOnLargePort_letsKubernetesAllocate() throws Exception {
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 8080)));
+        stubDeployBase("NodePort");
+        Services s = stubServicesList(Collections.emptyList());
+
+        kubeStackService.deployStack(new DeployStackDto(1));
+
+        Service svc = captureCreatedService(s);
+        assertThat(svc.getSpec().getType()).isEqualTo("NodePort");
+        // 8080 > 2767，固定映射放不下 → 不指定 nodePort，交给 k8s 自动分配
+        assertThat(svc.getSpec().getPorts().get(0).getNodePort()).isNull();
+    }
+
     // ---- Service 幂等：createOrReplace 撞 NodePort 的回归修复 ----
 
     @Test

@@ -60,6 +60,11 @@ public class ServiceDo extends Base {
      */
     private String strategy;
 
+    /**
+     * K8s Service 类型：ClusterIP / NodePort / LoadBalancer；空 = 自动
+     */
+    private String serviceType;
+
     @TableField(typeHandler = JacksonTypeHandler.class)
     private List<Env> envs;
 }

@@ -179,6 +179,9 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 | terminationGracePeriodSeconds | string | | 停止宽限期 |
 | strategy | string | | 更新策略 |
 | envs | object[] | | 环境变量 `[{name, value}]`，JSON 列存储 |
+| serviceType | string | | K8s Service 类型：`ClusterIP` / `NodePort` / `LoadBalancer`，留空为**自动**（有端口即 NodePort，否则 ClusterIP） |
+
+> `serviceType` 仅影响 K8s 集群部署；Docker 集群忽略该字段。自动/显式 NodePort 时声明端口 ≤ 2767 固定映射 `30000+端口`，超出范围交给 k8s 自动分配。
 
 ### 3.2 修改服务 `POST /v1/update`
 

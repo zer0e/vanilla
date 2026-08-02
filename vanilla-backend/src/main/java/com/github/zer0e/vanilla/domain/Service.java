@@ -45,5 +45,10 @@ public class Service {
      */
     private String strategy;
 
+    /**
+     * K8s Service 类型：ClusterIP / NodePort / LoadBalancer；空 = 自动（有 NodePort 需求则 NodePort，否则 ClusterIP）
+     */
+    private String serviceType;
+
     private List<Env> envs;
 }

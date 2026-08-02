@@ -130,6 +130,13 @@
               </template>
             </el-table-column>
             <el-table-column prop="strategy" label="策略" width="110" />
+            <el-table-column label="服务类型" width="115" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.serviceType ? 'primary' : 'info'">
+                  {{ row.serviceType || '自动' }}
+                </el-tag>
+              </template>
+            </el-table-column>
             <el-table-column label="操作" width="190" fixed="right">
               <template #default="{ row }">
                 <el-button type="info" link @click="openLogDialog(row)">日志</el-button>
@@ -213,6 +220,16 @@
               <el-select v-model="serviceForm.strategy" style="width: 100%">
                 <el-option label="Recreate（重建）" value="Recreate" />
                 <el-option label="RollingUpdate（滚动更新）" value="RollingUpdate" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="服务类型" prop="serviceType">
+              <el-select v-model="serviceForm.serviceType" style="width: 100%">
+                <el-option label="自动（默认，有端口即 NodePort）" value="" />
+                <el-option label="ClusterIP（仅集群内访问）" value="ClusterIP" />
+                <el-option label="NodePort（节点端口暴露）" value="NodePort" />
+                <el-option label="LoadBalancer（负载均衡器）" value="LoadBalancer" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -607,6 +624,7 @@ function defaultServiceForm() {
     terminationGracePeriodSeconds: '',
     healthCheckCmd: '',
     strategy: 'Recreate',
+    serviceType: '',
     envs: []
   }
 }
@@ -627,6 +645,7 @@ const openServiceDialog = (row) => {
       terminationGracePeriodSeconds: row.terminationGracePeriodSeconds || '',
       healthCheckCmd: row.healthCheckCmd || '',
       strategy: row.strategy || 'Recreate',
+      serviceType: row.serviceType || '',
       envs: (row.envs || []).map((e) => ({ ...e }))
     }
   } else {

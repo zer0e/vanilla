@@ -33,12 +33,14 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @RequiredArgsConstructor
@@ -52,11 +54,21 @@ public class SerServiceImpl implements SerService {
     private final VolumeMapper volumeMapper;
     private final HistoryService historyService;
 
+    private static final Set<String> SUPPORTED_SERVICE_TYPES = Set.of("ClusterIP", "NodePort", "LoadBalancer");
+
+    private void validateServiceType(String serviceType) throws BusinessException {
+        if (StringUtils.hasText(serviceType) && !SUPPORTED_SERVICE_TYPES.contains(serviceType)) {
+            throw new BusinessException("不支持的服务类型：" + serviceType
+                    + "（可选 ClusterIP / NodePort / LoadBalancer，留空为自动）");
+        }
+    }
+
     @Override
     @PreAuthorize("hasAnyRole('stack_' + #createServiceDto.stackId + '_stack_admin'," +
             "'stack_' + #createServiceDto.stackId + '_stack_member')")
     @Transactional(rollbackFor = Exception.class)
     public ServiceVo createService(CreateServiceDto createServiceDto) throws BusinessException {
+        validateServiceType(createServiceDto.getServiceType());
         StackDo stackDo = stackMapper.selectById(createServiceDto.getStackId());
         if (stackDo == null || stackDo.getStatus() != DataStatus.EXIST.ordinal()) {
             throw new BusinessException(Constants.STACK_NOT_EXIST);
@@ -79,6 +91,7 @@ public class SerServiceImpl implements SerService {
     @PreAuthorize("hasAnyRole('stack_' + #updateServiceDto.stackId + '_stack_admin')")
     @Transactional(rollbackFor = Exception.class)
     public ServiceVo updateService(UpdateServiceDto updateServiceDto) throws BusinessException {
+        validateServiceType(updateServiceDto.getServiceType());
         ServiceDo serviceDo = serviceMapper.selectById(updateServiceDto.getId());
         if (serviceDo == null || serviceDo.getStatus() != DataStatus.EXIST.ordinal()) {
             throw new BusinessException(Constants.SERVICE_NOT_EXIST);
