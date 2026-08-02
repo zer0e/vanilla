@@ -389,15 +389,15 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="暴露端口">
+        <el-form-item label="容器端口">
           <div class="port-spec-list">
-            <div v-for="(p, idx) in serviceForm.ports" :key="idx" class="port-spec-item">
+            <div v-for="(p, idx) in serviceForm.containerPorts" :key="idx" class="port-spec-item">
               <el-select v-model="p.protocol" style="width: 100px">
                 <el-option label="tcp" value="tcp" />
                 <el-option label="udp" value="udp" />
               </el-select>
-              <el-input-number v-model="p.port" :min="1" :max="65535" placeholder="端口" style="width: 170px" />
-              <el-button type="danger" link @click="serviceForm.ports.splice(idx, 1)">
+              <el-input-number v-model="p.port" :min="1" :max="65535" placeholder="容器监听端口" style="width: 170px" />
+              <el-button type="danger" link @click="serviceForm.containerPorts.splice(idx, 1)">
                 <el-icon><Delete /></el-icon>
               </el-button>
             </div>
@@ -405,7 +405,7 @@
               <el-button size="small" type="primary" plain @click="addServicePort">
                 添加端口
               </el-button>
-              <span class="text-muted">访问方式在「端口访问」页逐端口配置</span>
+              <span class="text-muted">声明容器/Pod 监听的端口；对外访问在「端口访问」页创建 SVC</span>
             </div>
           </div>
         </el-form-item>
@@ -416,22 +416,49 @@
       </template>
     </el-dialog>
 
-    <!-- 端口访问方式对话框 -->
+    <!-- 端口访问：新建/编辑 SVC（引用服务已声明的容器端口） -->
     <el-dialog
       v-model="portDialogVisible"
-      title="配置访问方式"
+      :title="portForm.id ? '编辑 SVC' : '新建 SVC'"
       width="460px"
       destroy-on-close
     >
       <el-form ref="portFormRef" :model="portForm" :rules="portFormRules" label-width="90px">
         <el-form-item label="服务" prop="serviceId">
-          <el-input :model-value="portForm.serviceName || `#${portForm.serviceId}`" disabled />
+          <el-select
+            v-model="portForm.serviceId"
+            :disabled="!!portForm.id"
+            placeholder="选择服务（POD）"
+            style="width: 100%"
+          >
+            <el-option v-for="svc in services" :key="svc.id" :label="svc.serviceName" :value="svc.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="容器端口" prop="port">
+          <el-select
+            v-model="portForm.port"
+            :disabled="!!portForm.id"
+            placeholder="引用服务已声明的容器端口"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="cp in portContainerOptions"
+              :key="cp.port"
+              :label="`${cp.protocol || 'tcp'}/${cp.port}`"
+              :value="cp.port"
+            />
+            <el-option
+              v-if="portForm.id && portForm.port && !portContainerOptions.some((c) => c.port === portForm.port)"
+              :label="`${portForm.protocol || 'tcp'}/${portForm.port}`"
+              :value="portForm.port"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="协议">
-          <el-input :model-value="portForm.protocol || 'tcp'" disabled />
-        </el-form-item>
-        <el-form-item label="端口">
-          <el-input :model-value="String(portForm.port || '')" disabled />
+          <el-select v-model="portForm.protocol" style="width: 100%">
+            <el-option label="tcp" value="tcp" />
+            <el-option label="udp" value="udp" />
+          </el-select>
         </el-form-item>
         <el-form-item label="访问方式">
           <el-select v-model="portForm.serviceType" style="width: 100%">
