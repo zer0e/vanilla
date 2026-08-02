@@ -50,14 +50,16 @@ t_cluster 1 ── n t_stack 1 ── n t_service 1 ── n t_port
 
 ## 认证与授权（RBAC）
 
-### 认证：`XAuthUserFilter`
+### 认证：`JwtAuthenticationFilter`
 
-1. 从请求头读取 `x-auth-user: <登录名>`。
-2. 调用 `UserServiceImpl.loadUserByUsername`：
+1. 用户经 `POST /auth/api/v1/login`（用户名 + BCrypt 密码校验）换取 JWT（HS256，默认 12h）。
+2. 后续请求携带 `Authorization: Bearer <token>`，`JwtAuthenticationFilter` 在前置鉴权（`@PreAuthorize`）前解析 JWT 得到登录用户名。
+3. 调用 `UserServiceImpl.loadUserByUsername`：
    - 查 `t_user` → `t_user_role` → `t_role` / `t_permission`
    - 构造 `List<UserRolePermission>` 作为 authorities
    - 结果缓存到 Redis `USER_INFO_<用户名>`（24h TTL）
-3. 构造 `UsernamePasswordAuthenticationToken` 写入 `SecurityContextHolder`。
+4. 构造 `UsernamePasswordAuthenticationToken` 写入 `SecurityContextHolder`。
+5. 兼容兜底：无 JWT 时仍读取旧的 `x-auth-user` 请求头。
 
 ### 授权：`@PreAuthorize`
 

@@ -59,12 +59,16 @@ mysql -uroot -proot < src/main/resources/sql/vanilla.sql
 
 > 表结构含软删除审计字段与唯一约束（如 `t_stack.uk_cluster_stack` 永久占用栈名），已与 DO 实体对齐。
 
-> **已有库升级**：本版本 `t_service` 新增 `health_check_cmd` 列（健康检查命令）、`t_cluster` 新增证书存库三列，存量库需执行：
+> **已有库升级**：本版本 `t_service` 新增 `health_check_cmd` 列（健康检查命令）、`t_cluster` 新增证书存库三列、`t_user` 新增密码列（JWT 登录），存量库需执行：
 > ```sql
 > ALTER TABLE vanilla.t_service ADD COLUMN health_check_cmd varchar(255) NULL COMMENT '健康检查命令，如 curl -f http://localhost/health || exit 1' AFTER termination_grace_period_seconds;
 > ALTER TABLE vanilla.t_cluster ADD COLUMN ca_cert longtext NULL COMMENT 'CA 证书（PEM，上传存库）',
 >   ADD COLUMN client_cert longtext NULL COMMENT '客户端证书（PEM）',
 >   ADD COLUMN client_key longtext NULL COMMENT '客户端私钥（PEM）';
+> ALTER TABLE vanilla.t_user ADD COLUMN password varchar(255) NULL COMMENT '登录密码（BCrypt 哈希）' AFTER login_name;
+> -- 为存量 admin 设置默认密码 admin123（BCrypt 哈希，登录后请修改）
+> UPDATE vanilla.t_user SET password='$2a$10$FhdXj62bhe2bqtr/47dzK.vQRWEbMBtjvP0di7gEpM.z5dn3Ya7Wq'
+>   WHERE login_name='admin' AND password IS NULL;
 > ```
 
 ## 5. 配置

@@ -5,15 +5,28 @@
       <div class="login-subtitle">基于 Docker 的服务部署与运维</div>
 
       <el-form ref="formRef" :model="form" :rules="rules" @keyup.enter="handleLogin">
-        <el-form-item prop="username">
+        <el-form-item prop="loginName">
           <el-input
-            v-model="form.username"
+            v-model="form.loginName"
             placeholder="请输入登录用户名"
             size="large"
             clearable
           >
             <template #prefix>
               <el-icon><User /></el-icon>
+            </template>
+          </el-input>
+        </el-form-item>
+        <el-form-item prop="password">
+          <el-input
+            v-model="form.password"
+            placeholder="请输入密码"
+            size="large"
+            type="password"
+            show-password
+          >
+            <template #prefix>
+              <el-icon><Lock /></el-icon>
             </template>
           </el-input>
         </el-form-item>
@@ -28,7 +41,7 @@
         </el-button>
       </el-form>
 
-      <div class="login-tip">平台通过请求头 x-auth-user 识别用户，无需密码</div>
+      <div class="login-tip">默认管理员账号 admin / admin123</div>
     </el-card>
   </div>
 </template>
@@ -38,6 +51,7 @@ import { reactive, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { login } from '@/api/auth'
 
 const router = useRouter()
 const route = useRoute()
@@ -45,25 +59,29 @@ const authStore = useAuthStore()
 
 const formRef = ref()
 const loading = ref(false)
-const form = reactive({ username: '' })
+const form = reactive({ loginName: '', password: '' })
 const rules = {
-  username: [{ required: true, message: '请输入登录用户名', trigger: 'blur' }]
+  loginName: [{ required: true, message: '请输入登录用户名', trigger: 'blur' }],
+  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
 }
 
 const handleLogin = () => {
-  formRef.value.validate((valid) => {
+  formRef.value.validate(async (valid) => {
     if (!valid) return
-    const name = form.username.trim()
-    if (!name) {
-      ElMessage.warning('请输入登录用户名')
-      return
-    }
     loading.value = true
-    authStore.setUsername(name)
-    ElMessage.success('登录成功')
-    const redirect = route.query.redirect
-    router.push(redirect || '/clusters')
-    loading.value = false
+    try {
+      const data = await login({
+        loginName: form.loginName.trim(),
+        password: form.password
+      })
+      authStore.setAuth({ token: data.token, loginName: data.loginName })
+      ElMessage.success(`欢迎回来，${data.nikeName || data.loginName}`)
+      router.push(route.query.redirect || '/clusters')
+    } catch (e) {
+      // 错误提示已由拦截器处理
+    } finally {
+      loading.value = false
+    }
   })
 }
 </script>

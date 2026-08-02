@@ -13,11 +13,8 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.core.userdetails.UserDetailsByNameServiceWrapper;
-import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-import org.springframework.security.web.authentication.preauth.PreAuthenticatedAuthenticationProvider;
 
 @Configuration
 @EnableWebSecurity
@@ -46,7 +43,7 @@ public class SecurityConfig {
         }
     }
 
-    private final XAuthUserFilter xAuthUserFilter;
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
 
     @Bean
@@ -67,11 +64,12 @@ public class SecurityConfig {
                             });
                         }
                 )
-                .addFilterBefore(xAuthUserFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .authorizeHttpRequests((authorize) -> authorize
                         .requestMatchers("/v3/api-docs/**", "/webjars/**",
                                 "/swagger-ui/**", "/swagger-ui.html", "/doc.html",
-                                "/error")
+                                "/error",
+                                "/auth/api/**")
                         .permitAll()
                         .anyRequest().authenticated()
 
@@ -82,14 +80,5 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
         ;
         return http.build();
-    }
-
-
-
-    @Bean
-    public PreAuthenticatedAuthenticationProvider preAuthenticatedAuthenticationProvider(UserDetailsService userDetailsService) {
-        PreAuthenticatedAuthenticationProvider provider = new PreAuthenticatedAuthenticationProvider();
-        provider.setPreAuthenticatedUserDetailsService(new UserDetailsByNameServiceWrapper<>(userDetailsService));
-        return provider;
     }
 }

@@ -26,6 +26,11 @@ public class UserDo {
     private Integer id;
     private String nikeName;
     private String loginName;
+
+    /**
+     * 登录密码（BCrypt 哈希，不参与 User 域对象/Redis 缓存序列化）
+     */
+    private String password;
     @JsonDeserialize(using = LocalDateTimeDeserializer.class)
     @JsonSerialize(using = LocalDateTimeSerializer.class)
     private LocalDateTime createTime;

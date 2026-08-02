@@ -6,3 +6,9 @@ spring:
 server:
   servlet:
     context-path: /vanilla
+vanilla:
+  jwt:
+    # HS256 签名密钥（生产环境务必通过环境变量覆盖为随机值）
+    secret: "vanilla-8f3a2c6e-9b41-4f7d-8c2a-5e6d7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f"
+    # token 有效期（分钟），默认 12 小时
+    expiration-minutes: 720

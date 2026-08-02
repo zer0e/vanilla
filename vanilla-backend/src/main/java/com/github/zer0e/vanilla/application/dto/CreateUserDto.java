@@ -19,6 +19,11 @@ public class CreateUserDto {
     private String loginName;
 
     /**
+     * 登录密码（存 BCrypt 哈希；留空则不设置，该用户无法登录）
+     */
+    private String password;
+
+    /**
      * 状态 0正常 1禁用，默认 0
      */
     private Integer status;

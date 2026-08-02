@@ -3,7 +3,9 @@ package com.github.zer0e.vanilla.application;
 import com.github.zer0e.vanilla.application.dto.CreateUserDto;
 import com.github.zer0e.vanilla.application.dto.DeleteUserDto;
 import com.github.zer0e.vanilla.application.dto.GetUsersDto;
+import com.github.zer0e.vanilla.application.dto.LoginDto;
 import com.github.zer0e.vanilla.application.dto.UpdateUserDto;
+import com.github.zer0e.vanilla.application.vo.LoginVo;
 import com.github.zer0e.vanilla.application.vo.UserVo;
 import com.github.zer0e.vanilla.common.PageData;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
@@ -13,6 +15,11 @@ import com.github.zer0e.vanilla.infrastructure.db.repository.UserRoleDo;
 import java.util.List;
 
 public interface UserService {
+
+    /**
+     * 用户名 + 密码登录，校验通过返回 JWT
+     */
+    LoginVo login(LoginDto loginDto) throws BusinessException;
 
     List<UserRoleDo> getClusterUserRoles(Integer userId);
 

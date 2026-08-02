@@ -7,12 +7,12 @@ const service = axios.create({
   timeout: 60000
 })
 
-// 请求拦截：附加 x-auth-user 请求头（后端据此识别登录用户）
+// 请求拦截：附加 JWT（后端通过 Authorization: Bearer <token> 识别登录用户）
 service.interceptors.request.use(
   (config) => {
-    const username = localStorage.getItem('vanilla_username')
-    if (username) {
-      config.headers['x-auth-user'] = username
+    const token = localStorage.getItem('vanilla_token')
+    if (token) {
+      config.headers['Authorization'] = `Bearer ${token}`
     }
     return config
   },
@@ -32,10 +32,11 @@ service.interceptors.response.use(
     }
     const silent = response.config?.silent === true
     if (res.code === 401) {
-      // 未登录 / 用户不存在或已禁用（后端 msg 为英文 Unauthorized，这里统一中文提示）
+      // 未登录 / token 失效或账号已禁用
       if (!silent) {
-        ElMessage.error('未登录或账号已禁用，请重新登录')
+        ElMessage.error('未登录或登录已过期，请重新登录')
       }
+      localStorage.removeItem('vanilla_token')
       localStorage.removeItem('vanilla_username')
       // 强制跳转登录页（全量刷新，重置内存状态）
       if (!window.location.pathname.startsWith('/login')) {

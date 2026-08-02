@@ -99,6 +99,17 @@
               <el-input v-model="form.loginName" :disabled="!!form.id" placeholder="如 dev1" />
             </el-form-item>
           </el-col>
+          <el-col :span="12">
+            <el-form-item label="密码" prop="password">
+              <el-input
+                v-model="form.password"
+                :placeholder="form.id ? '留空则不修改' : '初始登录密码'"
+                type="password"
+                show-password
+                :minlength="6"
+              />
+            </el-form-item>
+          </el-col>
         </el-row>
 
         <el-form-item label="状态">
@@ -249,6 +260,7 @@ function defaultForm() {
     id: null,
     nikeName: '',
     loginName: '',
+    password: '',
     status: 0,
     roles: []
   }
@@ -355,17 +367,17 @@ const handleSave = () => {
     saving.value = true
     try {
       const roles = form.roles.filter((r) => r.roleName)
+      const payload = { nikeName: form.nikeName, status: form.status, roles }
+      // 密码留空不提交（创建时表示不设密码，编辑时表示不修改）
+      if (form.password) {
+        payload.password = form.password
+      }
       if (form.id) {
         // 更新：roles 非 null 时全量替换
-        await updateUser({ id: form.id, nikeName: form.nikeName, status: form.status, roles })
+        await updateUser({ id: form.id, ...payload })
         ElMessage.success('用户已更新')
       } else {
-        await createUser({
-          nikeName: form.nikeName,
-          loginName: form.loginName,
-          status: form.status,
-          roles
-        })
+        await createUser({ ...payload, loginName: form.loginName })
         ElMessage.success('用户已创建')
       }
       dialogVisible.value = false

@@ -18,6 +18,11 @@ public class UpdateUserDto {
     private String nikeName;
 
     /**
+     * 重置密码（存 BCrypt 哈希；留空表示不修改）
+     */
+    private String password;
+
+    /**
      * 状态 0正常 1禁用
      */
     private Integer status;

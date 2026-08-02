@@ -61,7 +61,7 @@
       └───────────────────┘   └───────────────────┘   └─────────────────────┘
 ```
 
-> 认证机制：网关/客户端在请求头携带 `x-auth-user: <登录名>`，`XAuthUserFilter` 加载用户信息及角色权限，构造 Spring Security 认证上下文，方法级 `@PreAuthorize` 完成鉴权。
+> 认证机制：用户名 + 密码经 `POST /auth/api/v1/login` 换取 **JWT**，受保护接口携带 `Authorization: Bearer <token>`；`JwtAuthenticationFilter` 在 `@PreAuthorize` 前将登录用户名及其角色权限装载到 Spring Security 上下文完成鉴权。默认管理员 `admin / admin123`（登录后请修改）。旧 `x-auth-user` 请求头仍兼容（过渡期）。
 
 ## 目录结构
 
@@ -166,6 +166,7 @@ curl -X POST http://localhost:8080/vanilla/stack/api/v1/deploy \
 
 | 模块 | 端点 | 说明 |
 |---|---|---|
+| 认证 | `POST /auth/api/v1/login` | 用户名+密码登录，返回 JWT（公开接口） |
 | 集群 | `POST /cluster/api/v1/create` | 创建集群（需 admin） |
 | | `POST /cluster/api/v1/update` | 修改集群（需 admin） |
 | | `POST /cluster/api/v1/delete` | 删除集群（需 admin，软删除） |

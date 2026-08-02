@@ -6,13 +6,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import com.github.zer0e.vanilla.application.UserService;
+import com.github.zer0e.vanilla.application.config.security.JwtTokenProvider;
 import com.github.zer0e.vanilla.application.dto.CreateUserDto;
 import com.github.zer0e.vanilla.application.dto.DeleteUserDto;
 import com.github.zer0e.vanilla.application.dto.GetUsersDto;
+import com.github.zer0e.vanilla.application.dto.LoginDto;
 import com.github.zer0e.vanilla.application.dto.RoleBindingDto;
 import com.github.zer0e.vanilla.application.dto.UpdateUserDto;
+import com.github.zer0e.vanilla.application.vo.LoginVo;
 import com.github.zer0e.vanilla.application.vo.UserRoleBindingVo;
 import com.github.zer0e.vanilla.application.vo.UserVo;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import com.github.zer0e.vanilla.common.Constants;
 import com.github.zer0e.vanilla.common.PageData;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
@@ -31,6 +35,7 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -52,6 +57,8 @@ public class UserServiceImpl implements UserService, UserDetailsService {
     private final RolePermissionMapper rolePermissionMapper;
     private final PermissionMapper permissionMapper;
     private final StringRedisTemplate redisTemplate;
+    private final JwtTokenProvider jwtTokenProvider;
+    private final PasswordEncoder passwordEncoder;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
@@ -178,6 +185,31 @@ public class UserServiceImpl implements UserService, UserDetailsService {
     }
 
     @Override
+    public LoginVo login(LoginDto loginDto) throws BusinessException {
+        // 不按状态过滤（findByLoginName 自带 status=0），以便区分「不存在 / 已禁用 / 密码错误」
+        UserDo user = userMapper.selectOne(new LambdaQueryWrapper<UserDo>()
+                .eq(UserDo::getLoginName, loginDto.getLoginName()));
+        if (user == null) {
+            throw new BusinessException("用户名或密码错误");
+        }
+        if (user.getStatus() != null && user.getStatus() == 1) {
+            throw new BusinessException("账号已禁用，请联系管理员");
+        }
+        if (!StringUtils.hasText(user.getPassword())) {
+            throw new BusinessException("账号未设置密码，请联系管理员");
+        }
+        if (!passwordEncoder.matches(loginDto.getPassword(), user.getPassword())) {
+            throw new BusinessException("用户名或密码错误");
+        }
+        String token = jwtTokenProvider.generateToken(user.getLoginName());
+        return LoginVo.builder()
+                .token(token)
+                .loginName(user.getLoginName())
+                .nikeName(user.getNikeName())
+                .build();
+    }
+
+    @Override
     public List<UserRoleDo> getClusterUserRoles(Integer userId) {
         LambdaQueryWrapper<UserRoleDo> lambdaQueryWrapper = new LambdaQueryWrapper<>();
         lambdaQueryWrapper.eq(UserRoleDo::getUserId, userId)
@@ -213,6 +245,9 @@ public class UserServiceImpl implements UserService, UserDetailsService {
         UserDo userDo = new UserDo();
         userDo.setNikeName(createUserDto.getNikeName());
         userDo.setLoginName(createUserDto.getLoginName());
+        if (StringUtils.hasText(createUserDto.getPassword())) {
+            userDo.setPassword(passwordEncoder.encode(createUserDto.getPassword()));
+        }
         userDo.setStatus(createUserDto.getStatus() == null ? 0 : createUserDto.getStatus());
         userDo.setCreateTime(LocalDateTime.now());
         userMapper.insert(userDo);
@@ -231,6 +266,9 @@ public class UserServiceImpl implements UserService, UserDetailsService {
         }
         if (updateUserDto.getNikeName() != null) {
             userDo.setNikeName(updateUserDto.getNikeName());
+        }
+        if (StringUtils.hasText(updateUserDto.getPassword())) {
+            userDo.setPassword(passwordEncoder.encode(updateUserDto.getPassword()));
         }
         if (updateUserDto.getStatus() != null) {
             userDo.setStatus(updateUserDto.getStatus());

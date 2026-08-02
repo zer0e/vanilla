@@ -4,15 +4,29 @@
 
 ## 通用约定
 
-### 认证
+### 认证（JWT）
 
-请求头携带登录用户名：
+**1. 登录换取 token**（公开接口）：
+
+```bash
+curl -X POST http://localhost:8080/vanilla/auth/api/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{"loginName":"admin","password":"admin123"}'
+```
+
+成功返回 `{token, loginName, nikeName}`，token 为 JWT（HS256，默认 12h 有效）。
+
+**2. 受保护接口携带 token**：
 
 ```
-x-auth-user: admin
+Authorization: Bearer <token>
 ```
 
-`XAuthUserFilter` 据此加载用户及其角色权限。未登录访问受保护接口返回：
+`JwtAuthenticationFilter` 解析 token 得到登录用户名，在 `@PreAuthorize` 鉴权前加载用户角色权限到 SecurityContext。
+
+> **旧调用方兜底**：仍兼容 `x-auth-user: <登录名>` 请求头（过渡期，后续移除），两接口的登录名均按 `t_user.login_name` 匹配。
+
+未登录/无效 token 访问受保护接口返回：
 
 ```json
 {"success":false,"code":401,"msg":"Unauthorized"}

@@ -115,6 +115,7 @@ create table vanilla.t_user
     id          int auto_increment primary key,
     nike_name   varchar(255) null,
     login_name  varchar(255) not null,
+    password    varchar(255) null comment '登录密码（BCrypt 哈希）',
     create_time datetime     null,
     status      tinyint      not null comment '用户状态0正常1封禁',
     constraint t_user_pk unique (login_name)
@@ -178,9 +179,10 @@ insert into vanilla.t_role (role_name) values
     ('stack_admin'), ('stack_member'), ('stack_readonly')
     on duplicate key update role_name = values(role_name);
 
--- 管理员账号
-insert into vanilla.t_user (nike_name, login_name, create_time, status)
-values ('Administrator', 'admin', now(), 0)
+-- 管理员账号（初始密码 admin123，登录后请尽快修改）
+insert into vanilla.t_user (nike_name, login_name, password, create_time, status)
+values ('Administrator', 'admin',
+        '$2a$10$FhdXj62bhe2bqtr/47dzK.vQRWEbMBtjvP0di7gEpM.z5dn3Ya7Wq', now(), 0)
     on duplicate key update nike_name = values(nike_name);
 
 -- admin 用户绑定 admin 角色
