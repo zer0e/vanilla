@@ -415,6 +415,7 @@
             :disabled="!!portForm.id"
             placeholder="引用服务已声明的容器端口"
             style="width: 100%"
+            @change="syncPortProtocol"
           >
             <el-option
               v-for="cp in portContainerOptions"
@@ -430,10 +431,18 @@
           </el-select>
         </el-form-item>
         <el-form-item label="协议">
-          <el-select v-model="portForm.protocol" style="width: 100%">
+          <el-select
+            v-if="!portProtocolAuto"
+            v-model="portForm.protocol"
+            style="width: 100%"
+            placeholder="选择协议"
+          >
             <el-option label="tcp" value="tcp" />
             <el-option label="udp" value="udp" />
           </el-select>
+          <el-tag v-else type="info" size="large" effect="plain">
+            {{ portForm.protocol || 'tcp' }}（由容器端口自动映射）
+          </el-tag>
         </el-form-item>
         <el-form-item label="访问方式">
           <el-select v-model="portForm.serviceType" style="width: 100%">
@@ -965,6 +974,17 @@ const portContainerOptions = computed(() => {
   return svc?.containerPorts || []
 })
 
+// 所选端口是否来自容器端口声明（是则协议由容器端口自动映射，无需手选）
+const portProtocolAuto = computed(() =>
+  portContainerOptions.value.some((c) => c.port === portForm.value.port)
+)
+
+// 选中容器端口时，协议自动映射为容器端口声明的协议
+const syncPortProtocol = () => {
+  const cp = portContainerOptions.value.find((c) => c.port === portForm.value.port)
+  if (cp) portForm.value.protocol = cp.protocol || 'tcp'
+}
+
 const openPortDialog = (port) => {
   if (port) {
     portForm.value = {
@@ -979,6 +999,7 @@ const openPortDialog = (port) => {
   } else {
     portForm.value = defaultPortForm()
   }
+  syncPortProtocol()
   portDialogVisible.value = true
 }
 
