@@ -13,4 +13,14 @@ public class PortVo {
     private String protocol;
 
     private Integer port;
+
+    /**
+     * K8s Service 类型：ClusterIP / NodePort / LoadBalancer；空 = 自动
+     */
+    private String serviceType;
+
+    /**
+     * 所属服务名（栈级端口管理页展示用）
+     */
+    private String serviceName;
 }

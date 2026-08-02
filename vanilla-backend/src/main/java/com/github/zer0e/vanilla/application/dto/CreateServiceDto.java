@@ -53,11 +53,6 @@ public class CreateServiceDto {
     private String strategy;
 
     /**
-     * K8s Service 类型：ClusterIP / NodePort / LoadBalancer；空 = 自动
-     */
-    private String serviceType;
-
-    /**
      * 引用的栈级卷 id 列表（创建时关联；卷本身独立存在）
      */
     private List<Integer> volumeIds;

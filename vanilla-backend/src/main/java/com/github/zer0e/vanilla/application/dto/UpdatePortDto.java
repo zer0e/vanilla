@@ -23,4 +23,9 @@ public class UpdatePortDto {
 
     @NotNull(message = "端口不能为空")
     private Integer port;
+
+    /**
+     * K8s Service 类型：ClusterIP / NodePort / LoadBalancer；空 = 自动
+     */
+    private String serviceType;
 }

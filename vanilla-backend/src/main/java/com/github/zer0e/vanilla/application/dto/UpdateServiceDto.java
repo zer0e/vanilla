@@ -54,11 +54,6 @@ public class UpdateServiceDto {
     private String strategy;
 
     /**
-     * K8s Service 类型：ClusterIP / NodePort / LoadBalancer；空 = 自动
-     */
-    private String serviceType;
-
-    /**
      * 引用的栈级卷 id 列表；null 表示不修改引用
      */
     private List<Integer> volumeIds;

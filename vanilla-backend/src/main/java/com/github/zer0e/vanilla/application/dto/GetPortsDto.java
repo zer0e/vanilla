@@ -10,7 +10,9 @@ public class GetPortsDto {
     @NotNull(message = "栈id不能为空")
     private Integer stackId;
 
-    @NotNull(message = "服务id不能为空")
+    /**
+     * 服务 id：为空时返回整个栈的端口（端口/SVC 管理页）
+     */
     private Integer serviceId;
 
     @Schema(requiredMode = Schema.RequiredMode.NOT_REQUIRED, defaultValue = "1")
@@ -18,4 +20,6 @@ public class GetPortsDto {
 
     @Schema(requiredMode = Schema.RequiredMode.NOT_REQUIRED, defaultValue = "15")
     private Integer size;
+
+    private String search;
 }

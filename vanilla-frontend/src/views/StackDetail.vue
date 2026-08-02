@@ -54,10 +54,8 @@
                 <div class="expanded">
                   <div class="expanded-section">
                     <div class="section-title">
-                      <span>端口</span>
-                      <el-button size="small" type="primary" @click="openPortDialog(service)">
-                        添加端口
-                      </el-button>
+                      <span>端口 / SVC</span>
+                      <span class="text-muted">在「端口/SVC」页维护，每个端口对应一个 Service</span>
                     </div>
                     <el-table :data="service.ports || []" size="small" border>
                       <el-table-column prop="protocol" label="协议" width="90" align="center">
@@ -66,18 +64,15 @@
                         </template>
                       </el-table-column>
                       <el-table-column prop="port" label="端口" width="120" align="center" />
-                      <el-table-column label="操作" width="140">
-                        <template #default="{ row: port }">
-                          <el-button size="small" type="primary" link @click="openPortDialog(service, port)">
-                            编辑
-                          </el-button>
-                          <el-button size="small" type="danger" link @click="handleDeletePort(service, port)">
-                            删除
-                          </el-button>
+                      <el-table-column label="SVC 类型" min-width="120" align="center">
+                        <template #default="{ row }">
+                          <el-tag size="small" :type="row.serviceType ? 'primary' : 'info'">
+                            {{ row.serviceType || '自动' }}
+                          </el-tag>
                         </template>
                       </el-table-column>
                       <template #empty>
-                        <span class="text-muted">暂无端口</span>
+                        <span class="text-muted">未暴露任何端口</span>
                       </template>
                     </el-table>
                   </div>
@@ -123,13 +118,6 @@
               </template>
             </el-table-column>
             <el-table-column prop="strategy" label="策略" width="110" />
-            <el-table-column label="服务类型" width="115" align="center">
-              <template #default="{ row }">
-                <el-tag size="small" :type="row.serviceType ? 'primary' : 'info'">
-                  {{ row.serviceType || '自动' }}
-                </el-tag>
-              </template>
-            </el-table-column>
             <el-table-column label="操作" width="190" fixed="right">
               <template #default="{ row }">
                 <el-button type="info" link @click="openLogDialog(row)">日志</el-button>
@@ -150,6 +138,61 @@
             class="pagination"
             @current-change="loadServices"
             @size-change="handleServiceSizeChange"
+          />
+        </el-tab-pane>
+
+        <!-- 端口 / SVC（每个端口对应一个 K8s Service，类型在端口上声明） -->
+        <el-tab-pane label="端口/SVC" name="ports">
+          <div class="toolbar">
+            <el-input
+              v-model="portSearch"
+              placeholder="搜索端口号"
+              clearable
+              style="width: 240px"
+              @change="handlePortSearch"
+              @clear="handlePortSearch"
+            >
+              <template #append>
+                <el-button @click="handlePortSearch"><el-icon><Search /></el-icon></el-button>
+              </template>
+            </el-input>
+            <el-button type="primary" @click="openPortDialog()">
+              <el-icon><Plus /></el-icon>&nbsp;暴露端口
+            </el-button>
+          </div>
+
+          <el-table v-loading="portsLoading" :data="ports" stripe>
+            <el-table-column prop="serviceName" label="服务" min-width="120" />
+            <el-table-column prop="protocol" label="协议" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag size="small">{{ row.protocol || 'tcp' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="port" label="端口" width="110" align="center" />
+            <el-table-column label="SVC 类型" min-width="120" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.serviceType ? 'primary' : 'info'">
+                  {{ row.serviceType || '自动' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="140" fixed="right">
+              <template #default="{ row }">
+                <el-button type="primary" link @click="openPortDialog(row)">编辑</el-button>
+                <el-button type="danger" link @click="handleDeletePort(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-if="!portsLoading && ports.length === 0" description="暂无暴露端口，点击右上角暴露端口" />
+          <el-pagination
+            v-model:current-page="portPage"
+            v-model:page-size="portSize"
+            :total="portCount"
+            :page-sizes="[10, 15, 20, 50]"
+            layout="total, sizes, prev, pager, next, jumper"
+            class="pagination"
+            @current-change="loadPorts"
+            @size-change="handlePortSizeChange"
           />
         </el-tab-pane>
 
@@ -261,17 +304,7 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="12">
-            <el-form-item label="服务类型" prop="serviceType">
-              <el-select v-model="serviceForm.serviceType" style="width: 100%">
-                <el-option label="自动（默认，有端口即 NodePort）" value="" />
-                <el-option label="ClusterIP（仅集群内访问）" value="ClusterIP" />
-                <el-option label="NodePort（节点端口暴露）" value="NodePort" />
-                <el-option label="LoadBalancer（负载均衡器）" value="LoadBalancer" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
+                    <el-col :span="12">
             <el-form-item label="CPU">
               <el-input-number v-model="serviceForm.cpu" :min="0" placeholder="CPU shares" />
             </el-form-item>
@@ -353,14 +386,19 @@
       </template>
     </el-dialog>
 
-    <!-- 端口对话框 -->
+    <!-- 端口 / SVC 对话框 -->
     <el-dialog
       v-model="portDialogVisible"
-      :title="portForm.id ? '编辑端口' : '添加端口'"
-      width="420px"
+      :title="portForm.id ? '编辑端口' : '暴露端口'"
+      width="460px"
       destroy-on-close
     >
       <el-form ref="portFormRef" :model="portForm" :rules="portFormRules" label-width="90px">
+        <el-form-item label="服务" prop="serviceId">
+          <el-select v-model="portForm.serviceId" :disabled="!!portForm.id" placeholder="选择要暴露的服务" style="width: 100%">
+            <el-option v-for="svc in services" :key="svc.id" :label="svc.serviceName" :value="svc.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="协议" prop="protocol">
           <el-select v-model="portForm.protocol" style="width: 100%">
             <el-option label="tcp" value="tcp" />
@@ -369,6 +407,14 @@
         </el-form-item>
         <el-form-item label="端口" prop="port">
           <el-input-number v-model="portForm.port" :min="1" :max="65535" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="SVC 类型">
+          <el-select v-model="portForm.serviceType" style="width: 100%">
+            <el-option label="自动（≤2767 为 NodePort，否则 ClusterIP）" value="" />
+            <el-option label="ClusterIP（仅集群内访问）" value="ClusterIP" />
+            <el-option label="NodePort（节点端口）" value="NodePort" />
+            <el-option label="LoadBalancer（负载均衡器）" value="LoadBalancer" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -458,7 +504,7 @@ import {
   updateService,
   deleteService
 } from '@/api/service'
-import { createPort, updatePort, deletePort } from '@/api/port'
+import { getPorts, createPort, updatePort, deletePort } from '@/api/port'
 import { getVolumes, createVolume, updateVolume, deleteVolume } from '@/api/volume'
 import { getHistory } from '@/api/history'
 import {
@@ -688,7 +734,6 @@ function defaultServiceForm() {
     terminationGracePeriodSeconds: '',
     healthCheckCmd: '',
     strategy: 'Recreate',
-    serviceType: '',
     envs: [],
     volumeIds: []
   }
@@ -710,7 +755,6 @@ const openServiceDialog = (row) => {
       terminationGracePeriodSeconds: row.terminationGracePeriodSeconds || '',
       healthCheckCmd: row.healthCheckCmd || '',
       strategy: row.strategy || 'Recreate',
-      serviceType: row.serviceType || '',
       envs: (row.envs || []).map((e) => ({ ...e })),
       volumeIds: (row.volumes || []).map((v) => v.id)
     }
@@ -774,12 +818,19 @@ const handleDeleteService = (row) => {
     .catch(() => {})
 }
 
-// ---------- 端口 ----------
+// ---------- 端口 / SVC（栈级管理，每个端口对应一个 K8s Service，类型在端口上声明） ----------
+const portsLoading = ref(false)
+const ports = ref([])
+const portCount = ref(0)
+const portPage = ref(1)
+const portSize = ref(15)
+const portSearch = ref('')
 const portDialogVisible = ref(false)
 const savingPort = ref(false)
 const portFormRef = ref()
 const portForm = ref(defaultPortForm())
 const portFormRules = {
+  serviceId: [{ required: true, message: '请选择服务', trigger: 'change' }],
   port: [{ required: true, message: '请输入端口', trigger: 'blur' }]
 }
 
@@ -789,21 +840,51 @@ function defaultPortForm() {
     stackId,
     serviceId: null,
     protocol: 'tcp',
-    port: undefined
+    port: undefined,
+    serviceType: ''
   }
 }
 
-const openPortDialog = (service, port) => {
+const loadPorts = async () => {
+  portsLoading.value = true
+  try {
+    const res = await getPorts({
+      stackId,
+      page: portPage.value,
+      size: portSize.value,
+      search: portSearch.value || undefined
+    })
+    ports.value = res?.data || []
+    portCount.value = res?.count || 0
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    portsLoading.value = false
+  }
+}
+
+const handlePortSearch = () => {
+  portPage.value = 1
+  loadPorts()
+}
+
+const handlePortSizeChange = () => {
+  portPage.value = 1
+  loadPorts()
+}
+
+const openPortDialog = (port) => {
   if (port) {
     portForm.value = {
       id: port.id,
       stackId,
-      serviceId: service.id,
+      serviceId: port.serviceId,
       protocol: port.protocol || 'tcp',
-      port: port.port
+      port: port.port,
+      serviceType: port.serviceType || ''
     }
   } else {
-    portForm.value = { ...defaultPortForm(), serviceId: service.id }
+    portForm.value = defaultPortForm()
   }
   portDialogVisible.value = true
 }
@@ -818,28 +899,30 @@ const savePort = () => {
         ElMessage.success('端口已更新')
       } else {
         await createPort({ ...portForm.value })
-        ElMessage.success('端口已添加')
+        ElMessage.success('端口已暴露')
       }
       portDialogVisible.value = false
+      await loadPorts()
       await loadServices()
     } catch (e) {
-      // 拦截器已提示（如端口重复）
+      // 拦截器已提示
     } finally {
       savingPort.value = false
     }
   })
 }
 
-const handleDeletePort = (service, port) => {
-  ElMessageBox.confirm('确定删除该端口吗？', '删除确认', {
+const handleDeletePort = (port) => {
+  ElMessageBox.confirm(`确定删除服务「${port.serviceName || port.serviceId}」的端口 ${port.protocol}:${port.port} 吗？`, '删除确认', {
     confirmButtonText: '删除',
     cancelButtonText: '取消',
     type: 'warning'
   })
     .then(async () => {
       try {
-        await deletePort({ id: port.id, stackId, serviceId: service.id })
+        await deletePort({ id: port.id, stackId, serviceId: port.serviceId })
         ElMessage.success('端口已删除')
+        await loadPorts()
         await loadServices()
       } catch (e) {
         // 拦截器已提示
@@ -1010,6 +1093,9 @@ watch(activeTab, (tab) => {
   }
   if (tab === 'volumes') {
     loadVolumes()
+  }
+  if (tab === 'ports') {
+    loadPorts()
   }
 })
 

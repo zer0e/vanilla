@@ -234,13 +234,13 @@ class KubernetesStackServiceImplTest {
 
     // ---- 自定义 Service 类型：ClusterIP / LoadBalancer / 大端口 NodePort ----
 
-    private void stubDeployBase(String serviceType) throws Exception {
+    private void stubDeployBase() throws Exception {
         when(stackMapper.selectById(1)).thenReturn(stack());
         when(clusterMapper.selectById(1)).thenReturn(cluster());
         when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(ServiceDo.builder().id(1).stackId(1).serviceName("nginx")
-                        .replicas(1).image("nginx:latest").serviceType(serviceType).build()));
+                        .replicas(1).image("nginx:latest").build()));
         when(volumeMapper.selectVolumesByServiceIds(java.util.List.of(1))).thenReturn(Collections.emptyList());
         stubNamespace();
         stubDeployments();
@@ -255,13 +255,15 @@ class KubernetesStackServiceImplTest {
 
     @Test
     void deployStack_explicitClusterIp_createsClusterIpServiceWithoutNodePort() throws Exception {
-        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
-        stubDeployBase("ClusterIP");
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80, "ClusterIP")));
+        stubDeployBase();
         Services s = stubServicesList(Collections.emptyList());
 
         kubeStackService.deployStack(new DeployStackDto(1));
 
         Service svc = captureCreatedService(s);
+        // 端口级 SVC：名称 = 服务名-端口
+        assertThat(svc.getMetadata().getName()).isEqualTo("nginx-80");
         assertThat(svc.getSpec().getType()).isEqualTo("ClusterIP");
         // 显式 ClusterIP：即使声明端口 80 也不分配 NodePort
         assertThat(svc.getSpec().getPorts().get(0).getNodePort()).isNull();
@@ -269,24 +271,27 @@ class KubernetesStackServiceImplTest {
 
     @Test
     void deployStack_explicitLoadBalancer_createsLoadBalancerService() throws Exception {
-        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
-        stubDeployBase("LoadBalancer");
-        Services s = stubServicesList(Collections.emptyList());
-
-        kubeStackService.deployStack(new DeployStackDto(1));
-
-        assertThat(captureCreatedService(s).getSpec().getType()).isEqualTo("LoadBalancer");
-    }
-
-    @Test
-    void deployStack_explicitNodePortOnLargePort_letsKubernetesAllocate() throws Exception {
-        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 8080)));
-        stubDeployBase("NodePort");
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80, "LoadBalancer")));
+        stubDeployBase();
         Services s = stubServicesList(Collections.emptyList());
 
         kubeStackService.deployStack(new DeployStackDto(1));
 
         Service svc = captureCreatedService(s);
+        assertThat(svc.getMetadata().getName()).isEqualTo("nginx-80");
+        assertThat(svc.getSpec().getType()).isEqualTo("LoadBalancer");
+    }
+
+    @Test
+    void deployStack_explicitNodePortOnLargePort_letsKubernetesAllocate() throws Exception {
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 8080, "NodePort")));
+        stubDeployBase();
+        Services s = stubServicesList(Collections.emptyList());
+
+        kubeStackService.deployStack(new DeployStackDto(1));
+
+        Service svc = captureCreatedService(s);
+        assertThat(svc.getMetadata().getName()).isEqualTo("nginx-8080");
         assertThat(svc.getSpec().getType()).isEqualTo("NodePort");
         // 8080 > 2767，固定映射放不下 → 不指定 nodePort，交给 k8s 自动分配
         assertThat(svc.getSpec().getPorts().get(0).getNodePort()).isNull();
@@ -310,7 +315,7 @@ class KubernetesStackServiceImplTest {
         Services s = stubServicesList(Collections.emptyList());
         // 集群上已存在同 spec 的 Service（NodePort 30080）→ 幂等跳过，不重复创建
         io.fabric8.kubernetes.api.model.Service existing = new io.fabric8.kubernetes.api.model.ServiceBuilder()
-                .withNewMetadata().withName("nginx").endMetadata()
+                .withNewMetadata().withName("nginx-80").endMetadata()
                 .withNewSpec().withType("NodePort")
                 .addNewPort().withPort(80).withProtocol("TCP").withNodePort(30080)
                 .withTargetPort(new io.fabric8.kubernetes.api.model.IntOrString(80)).endPort()
@@ -318,7 +323,7 @@ class KubernetesStackServiceImplTest {
                 .build();
         io.fabric8.kubernetes.client.dsl.ServiceResource existingRes = mock(
                 io.fabric8.kubernetes.client.dsl.ServiceResource.class);
-        when(s.svcNsOp.withName("nginx")).thenReturn(existingRes);
+        when(s.svcNsOp.withName("nginx-80")).thenReturn(existingRes);
         when(existingRes.get()).thenReturn(existing);
 
         kubeStackService.deployStack(new DeployStackDto(1));
@@ -344,7 +349,7 @@ class KubernetesStackServiceImplTest {
         Services s = stubServicesList(Collections.emptyList());
         // 已存在但 NodePort 不同 → 删旧建新
         io.fabric8.kubernetes.api.model.Service stale = new io.fabric8.kubernetes.api.model.ServiceBuilder()
-                .withNewMetadata().withName("nginx").endMetadata()
+                .withNewMetadata().withName("nginx-80").endMetadata()
                 .withNewSpec().withType("NodePort")
                 .addNewPort().withPort(80).withProtocol("TCP").withNodePort(30099)
                 .withTargetPort(new io.fabric8.kubernetes.api.model.IntOrString(80)).endPort()
@@ -352,7 +357,7 @@ class KubernetesStackServiceImplTest {
                 .build();
         io.fabric8.kubernetes.client.dsl.ServiceResource staleRes = mock(
                 io.fabric8.kubernetes.client.dsl.ServiceResource.class);
-        when(s.svcNsOp.withName("nginx")).thenReturn(staleRes);
+        when(s.svcNsOp.withName("nginx-80")).thenReturn(staleRes);
         when(staleRes.get()).thenReturn(stale);
         when(staleRes.delete()).thenReturn(Collections.emptyList());
 
@@ -404,7 +409,14 @@ class KubernetesStackServiceImplTest {
                 .addToLabels(Constants.SERVICE_ID_LABEL, "9")
                 .endMetadata()
                 .build();
-        Services s = stubServicesList(List.of(stale));
+        Services s = stubServicesList(Collections.emptyList());
+        // 端口级 SVC 清理按 service 标签查（服务 1 无残留 → 空）；孤儿清理按 stack 标签查 → 返回 stale
+        io.fabric8.kubernetes.client.dsl.NonNamespaceOperation orphanOp =
+                mock(io.fabric8.kubernetes.client.dsl.NonNamespaceOperation.class);
+        when(s.svcNsOp.withLabel(Constants.STACK_ID_LABEL, "1")).thenReturn(orphanOp);
+        io.fabric8.kubernetes.api.model.ServiceList orphanList = mock(io.fabric8.kubernetes.api.model.ServiceList.class);
+        when(orphanList.getItems()).thenReturn(List.of(stale));
+        when(orphanOp.list()).thenReturn(orphanList);
         io.fabric8.kubernetes.client.dsl.ServiceResource staleRes = mock(
                 io.fabric8.kubernetes.client.dsl.ServiceResource.class);
         when(s.svcNsOp.withName("old")).thenReturn(staleRes);
@@ -412,7 +424,7 @@ class KubernetesStackServiceImplTest {
 
         kubeStackService.deployStack(new DeployStackDto(1));
 
-        // 孤儿 Service 被清理
+        // 孤儿 Service 被清理（仅一次：端口级清理的 service 标签查不到它）
         verify(staleRes).delete();
     }
 
@@ -539,6 +551,10 @@ class KubernetesStackServiceImplTest {
 
     private PortDo port(String protocol, int port) {
         return PortDo.builder().protocol(protocol).port(port).build();
+    }
+
+    private PortDo port(String protocol, int port, String serviceType) {
+        return PortDo.builder().protocol(protocol).port(port).serviceType(serviceType).build();
     }
 
     private ClusterDo cluster() {

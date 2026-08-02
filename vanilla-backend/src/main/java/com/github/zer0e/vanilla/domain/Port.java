@@ -14,4 +14,8 @@ public class Port {
     private Integer port;
     private Integer serviceId;
 
+    /**
+     * K8s Service 类型：ClusterIP / NodePort / LoadBalancer；空 = 自动（每个端口对应一个 SVC）
+     */
+    private String serviceType;
 }

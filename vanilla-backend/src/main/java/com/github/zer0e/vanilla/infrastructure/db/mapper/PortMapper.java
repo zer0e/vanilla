@@ -14,4 +14,6 @@ public interface PortMapper extends BaseMapper<PortDo> {
     List<PortDo> selectPortsByServiceId(@Param("serviceId") Integer serviceId);
 
     List<PortDo> selectPortsByServiceIds(@Param("serviceIds") List<Integer> serviceIds);
+
+    List<PortDo> selectPortsByStackIdAndSearch(@Param("stackId") Integer stackId, @Param("search") String search);
 }

@@ -73,6 +73,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -134,7 +135,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
                 List<PortDo> ports = portMapper.selectPortsByServiceId(service.getId());
                 List<VolumeDo> volumes = volumeMapper.selectVolumesByServiceIds(List.of(service.getId()));
                 ensurePvc(client, namespace, stack.getId(), service, volumes);
-                upsertService(client, namespace, stack.getId(), service, ports);
+                upsertServices(client, namespace, stack.getId(), service, ports);
                 upsertDeployment(client, namespace, stack.getId(), service, ports, volumes);
                 log.info("k8s upsert deployment done, ns={}, stackId={}, service={}",
                         namespace, stack.getId(), service.getServiceName());
@@ -167,12 +168,12 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
             }
         }
         List<ServiceDo> services = serviceMapper.selectServicesByStackIdAndSearch(stack.getId(), null);
-        // 暴露地址：按 Service 资源回填（NodePort → 节点IP:nodePort，LoadBalancer → externalIP，ClusterIP → 集群内地址）
-        Map<String, io.fabric8.kubernetes.api.model.Service> svcByServiceId = new HashMap<>();
+        // 暴露地址：每个端口一个 SVC，按服务 id 聚合（NodePort → 节点IP:nodePort，LoadBalancer → externalIP，ClusterIP → 集群内地址）
+        Map<String, List<io.fabric8.kubernetes.api.model.Service>> svcByServiceId = new HashMap<>();
         for (io.fabric8.kubernetes.api.model.Service svc : listStackServices(client, namespace, stack.getId())) {
             String sid = labelOf(svc, Constants.SERVICE_ID_LABEL);
             if (sid != null) {
-                svcByServiceId.put(sid, svc);
+                svcByServiceId.computeIfAbsent(sid, k -> new ArrayList<>()).add(svc);
             }
         }
         String nodeIp = firstNodeInternalIp(client);
@@ -195,8 +196,12 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
             status.setRunningCount(ready);
             status.setHealthyCount(ready);
             status.setStatus(RuntimeStateResolver.resolveStatus(total, ready));
-            status.setExposedAddresses(buildK8sExposedAddresses(
-                    svcByServiceId.get(String.valueOf(service.getId())), nodeIp));
+            List<String> exposed = new ArrayList<>();
+            for (io.fabric8.kubernetes.api.model.Service svc :
+                    svcByServiceId.getOrDefault(String.valueOf(service.getId()), Collections.emptyList())) {
+                exposed.addAll(buildK8sExposedAddresses(svc, nodeIp));
+            }
+            status.setExposedAddresses(exposed.stream().distinct().toList());
             serviceStatuses.add(status);
         }
         StackStatusVo result = new StackStatusVo();
@@ -321,73 +326,93 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     }
 
     /**
-     * 幂等维护 Service：NodePort 槽位与端口在创建后不可直接替换（createOrReplace 会报
-     * "nodePort already allocated"），故已存在且 spec 一致时跳过，仅 spec 变化才删旧建新
-     */
-    private void upsertService(KubernetesClient client, String namespace, Integer stackId, ServiceDo service,
-                               List<PortDo> ports) {
-        if (CollectionUtils.isEmpty(ports)) {
-            // 无端口声明的服务不创建 Service——等价 Docker 下无端口映射的容器，避免 k8s 报 spec.ports Required
-            log.info("skip k8s service creation, no ports declared, stackId={}, service={}",
-                    stackId, service.getServiceName());
-            return;
-        }
-        Map<String, String> labels = deploymentLabels(stackId, service);
-        // K8s Service 类型：显式 serviceType 优先；空 = 自动（有 NodePort 需求则 NodePort，否则 ClusterIP）
-        String requestedType = normalizeServiceType(service.getServiceType());
-        boolean autoType = !StringUtils.hasText(requestedType);
-        List<ServicePort> servicePorts = new ArrayList<>();
-        boolean nodePortRequested = false;
-        for (PortDo port : ports) {
-            int declared = port.getPort();
-            ServicePortBuilder builder = new ServicePortBuilder()
-                    .withPort(declared)
-                    .withTargetPort(new IntOrString(declared))
-                    .withProtocol(port.getProtocol() == null ? "TCP" : port.getProtocol().toUpperCase());
-            if (autoType) {
-                // 自动：声明端口 ≤ 2767 映射 NodePort 30000+端口
-                if (declared <= NODE_PORT_MAX_DECLARED) {
-                    builder.withNodePort(NODE_PORT_BASE + declared);
-                    nodePortRequested = true;
-                }
-            } else if ("NodePort".equals(requestedType)) {
-                // 显式 NodePort：≤2767 固定 30000+端口，超出范围交给 k8s 自动分配
-                nodePortRequested = true;
-                if (declared <= NODE_PORT_MAX_DECLARED) {
-                    builder.withNodePort(NODE_PORT_BASE + declared);
-                }
-            }
-            servicePorts.add(builder.build());
-        }
-        String targetType = autoType
-                ? (nodePortRequested ? "NodePort" : "ClusterIP")
-                : requestedType;
-
+ * 端口即 SVC：为服务的每个端口创建一个 K8s Service（名 `{服务名}-{端口}`），
+ * SVC 类型取端口上的 serviceType（空 = 自动：≤2767 固定 NodePort 30000+端口，否则 ClusterIP）。
+ * NodePort 槽位在创建后不可直接替换，故已存在且 spec 一致时跳过，仅 spec 变化才删旧建新；
+ * 结束后清理该服务不再存在的旧端口 SVC。
+ */
+private void upsertServices(KubernetesClient client, String namespace, Integer stackId, ServiceDo service,
+                            List<PortDo> ports) {
+    if (CollectionUtils.isEmpty(ports)) {
+        // 无端口声明的服务不创建 SVC——等价 Docker 下无端口映射的容器，避免 k8s 报 spec.ports Required
+        log.info("skip k8s svc creation, no ports declared, stackId={}, service={}",
+                stackId, service.getServiceName());
+        return;
+    }
+    Map<String, String> labels = deploymentLabels(stackId, service);
+    Set<String> expectedNames = new HashSet<>();
+    for (PortDo port : ports) {
+        String name = svcName(service.getServiceName(), port);
+        expectedNames.add(name);
+        ServicePort servicePort = buildServicePort(port);
+        String type = resolveSvcType(port.getServiceType(), port.getPort());
         io.fabric8.kubernetes.api.model.Service serviceResource = new ServiceBuilder()
                 .withNewMetadata()
-                .withName(resourceName(service.getServiceName()))
+                .withName(name)
                 .withLabels(labels)
                 .endMetadata()
                 .withNewSpec()
-                .withType(targetType)
+                .withType(type)
                 .withSelector(labels)
-                .withPorts(servicePorts)
+                .withPorts(List.of(servicePort))
                 .endSpec()
                 .build();
 
-        String name = serviceResource.getMetadata().getName();
         io.fabric8.kubernetes.api.model.Service existing =
                 client.services().inNamespace(namespace).withName(name).get();
         if (existing != null) {
             if (!sameServiceSpec(existing, serviceResource)) {
-                log.info("service spec changed, recreate k8s service, name={}", name);
+                log.info("service spec changed, recreate k8s svc, name={}", name);
                 client.services().inNamespace(namespace).withName(name).delete();
                 client.services().inNamespace(namespace).resource(serviceResource).create();
             }
-            return;
+            continue;
         }
         client.services().inNamespace(namespace).resource(serviceResource).create();
     }
+    // 清理该服务下已删除端口的残留 SVC（端口变更后重部署）
+    for (io.fabric8.kubernetes.api.model.Service svc : client.services().inNamespace(namespace)
+            .withLabel(Constants.SERVICE_ID_LABEL, String.valueOf(service.getId())).list().getItems()) {
+        if (!expectedNames.contains(svc.getMetadata().getName())) {
+            client.services().inNamespace(namespace).withName(svc.getMetadata().getName()).delete();
+        }
+    }
+}
+
+/**
+ * 每个声明的端口一个 ServicePort：自动/NodePort 且 ≤2767 固定映射 30000+端口，超出交给 k8s 自动分配
+ */
+private ServicePort buildServicePort(PortDo port) {
+    int declared = port.getPort();
+    ServicePortBuilder builder = new ServicePortBuilder()
+            .withPort(declared)
+            .withTargetPort(new IntOrString(declared))
+            .withProtocol(port.getProtocol() == null ? "TCP" : port.getProtocol().toUpperCase());
+    String type = resolveSvcType(port.getServiceType(), declared);
+    if (("NodePort".equals(type) || type == null) && declared <= NODE_PORT_MAX_DECLARED) {
+        builder.withNodePort(NODE_PORT_BASE + declared);
+    }
+    return builder.build();
+}
+
+/**
+ * 解析端口 SVC 类型：显式 serviceType（ClusterIP/NodePort/LoadBalancer）；
+ * 空 = 自动（≤2767 端口 → NodePort，其余 ClusterIP）
+ */
+private String resolveSvcType(String serviceType, int declaredPort) {
+    String normalized = normalizeServiceType(serviceType);
+    if (normalized != null) {
+        return normalized;
+    }
+    return declaredPort <= NODE_PORT_MAX_DECLARED ? "NodePort" : "ClusterIP";
+}
+
+/**
+ * 端口对应 SVC 名称：{服务名}-{端口}（栈内服务名唯一，DNS-1035 字母开头）
+ */
+private String svcName(String serviceName, PortDo port) {
+    return sanitize(serviceName + "-" + port.getPort());
+}
 
     /**
      * Service spec 一致性比较：type + 端口（协议/端口/NodePort/目标端口）都一致视为幂等

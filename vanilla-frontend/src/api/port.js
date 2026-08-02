@@ -1,5 +1,7 @@
 import request from './http'
 
+export const getPorts = (data) => request.post('/port/api/v1/list', data)
+
 export const createPort = (data) => request.post('/port/api/v1/create', data)
 
 export const updatePort = (data) => request.post('/port/api/v1/update', data)
