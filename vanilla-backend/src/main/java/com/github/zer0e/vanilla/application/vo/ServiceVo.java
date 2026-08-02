@@ -1,6 +1,5 @@
 package com.github.zer0e.vanilla.application.vo;
 
-import com.github.zer0e.vanilla.domain.Port;
 import com.github.zer0e.vanilla.domain.Service;
 import com.github.zer0e.vanilla.domain.Volume;
 import lombok.Data;
@@ -13,6 +12,6 @@ import java.util.List;
 @Data
 @SuperBuilder
 public class ServiceVo extends Service {
-    private List<Port> ports;
+    // 端口（SVC）不再内嵌于服务列表，统一在「端口访问」页按栈查询
     private List<Volume> volumes;
 }

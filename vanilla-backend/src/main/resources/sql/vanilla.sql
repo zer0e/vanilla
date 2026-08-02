@@ -60,7 +60,6 @@ create table vanilla.t_service
     termination_grace_period_seconds varchar(64)  null,
     health_check_cmd                 varchar(255) null comment '健康检查命令，如 curl -f http://localhost/health || exit 1',
     strategy                         varchar(64)  null,
-    container_ports                  json         null comment '容器/Pod 暴露端口 [{protocol, port}]（服务表单声明）',
     envs                             json         null comment '环境变量',
     create_user                      varchar(255) null,
     create_time                      datetime     null,

@@ -15,7 +15,6 @@ import com.github.zer0e.vanilla.common.PageData;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
 import com.github.zer0e.vanilla.common.util.SecurityUtil;
 import com.github.zer0e.vanilla.domain.DataStatus;
-import com.github.zer0e.vanilla.domain.Port;
 import com.github.zer0e.vanilla.domain.Volume;
 import com.github.zer0e.vanilla.infrastructure.converter.ServiceConverter;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.PortMapper;
@@ -151,9 +150,7 @@ public class SerServiceImpl implements SerService {
             return;
         }
         List<Integer> serviceIds = serviceVos.stream().map(ServiceVo::getId).toList();
-        List<PortDo> portDos = portMapper.selectPortsByServiceIds(serviceIds);
-        Map<Integer, List<Port>> portMap = portDos.stream().collect(Collectors.groupingBy(PortDo::getServiceId,
-                Collectors.mapping(SerServiceImpl::toPort, Collectors.toList())));
+
         // 卷引用：经 t_service_volume 关联，卷本身为栈级资源（serviceId 可能为 null，不能用 groupingBy 卷内字段）
         Map<Integer, List<Volume>> volumeMap = new HashMap<>();
         List<ServiceVolumeDo> refs = serviceVolumeMapper.selectList(new LambdaQueryWrapper<ServiceVolumeDo>()
@@ -172,19 +169,8 @@ public class SerServiceImpl implements SerService {
             }
         }
         for (ServiceVo serviceVo : serviceVos) {
-            serviceVo.setPorts(portMap.getOrDefault(serviceVo.getId(), Collections.emptyList()));
             serviceVo.setVolumes(volumeMap.getOrDefault(serviceVo.getId(), Collections.emptyList()));
         }
-    }
-
-    private static Port toPort(PortDo portDo) {
-        Port port = new Port();
-        port.setId(portDo.getId());
-        port.setStackId(portDo.getStackId());
-        port.setProtocol(portDo.getProtocol());
-        port.setPort(portDo.getPort());
-        port.setServiceId(portDo.getServiceId());
-        return port;
     }
 
     private static Volume toVolume(VolumeDo volumeDo) {

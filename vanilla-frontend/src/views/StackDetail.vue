@@ -54,31 +54,6 @@
                 <div class="expanded">
                   <div class="expanded-section">
                     <div class="section-title">
-                      <span>容器端口</span>
-                      <span class="text-muted">在「端口访问」页为容器端口创建 SVC</span>
-                    </div>
-                    <el-table :data="service.ports || []" size="small" border>
-                      <el-table-column prop="protocol" label="协议" width="90" align="center">
-                        <template #default="{ row }">
-                          <el-tag size="small">{{ row.protocol || 'tcp' }}</el-tag>
-                        </template>
-                      </el-table-column>
-                      <el-table-column prop="port" label="容器端口" width="120" align="center" />
-                      <el-table-column label="暴露方式" min-width="120" align="center">
-                        <template #default="{ row }">
-                          <el-tag size="small" :type="row.serviceType ? 'primary' : 'info'">
-                            {{ row.serviceType || '自动' }}
-                          </el-tag>
-                        </template>
-                      </el-table-column>
-                      <template #empty>
-                        <span class="text-muted">未暴露任何端口</span>
-                      </template>
-                    </el-table>
-                  </div>
-
-                  <div class="expanded-section">
-                    <div class="section-title">
                       <span>卷</span>
                       <span class="text-muted">在「卷管理」页维护，服务引用挂载</span>
                     </div>
