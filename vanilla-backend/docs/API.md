@@ -24,7 +24,7 @@ Authorization: Bearer <token>
 
 `JwtAuthenticationFilter` 解析 token 得到登录用户名，在 `@PreAuthorize` 鉴权前加载用户角色权限到 SecurityContext。
 
-> **旧调用方兜底**：仍兼容 `x-auth-user: <登录名>` 请求头（过渡期，后续移除），两接口的登录名均按 `t_user.login_name` 匹配。
+> 受保护接口一律使用 **JWT**（`Authorization: Bearer <token>`），登录用户名取自 token 的 subject，按 `t_user.login_name` 匹配。
 
 未登录/无效 token 访问受保护接口返回：
 
@@ -107,7 +107,7 @@ Authorization: Bearer <token>
 
 ```bash
 curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"clusterName":"docker-1","type":"DOCKER","endpoint":"unix:///var/run/docker.sock","tlsVerify":false}'
 ```
 

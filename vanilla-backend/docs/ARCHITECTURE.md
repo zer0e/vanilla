@@ -59,7 +59,7 @@ t_cluster 1 ── n t_stack 1 ── n t_service 1 ── n t_port
    - 构造 `List<UserRolePermission>` 作为 authorities
    - 结果缓存到 Redis `USER_INFO_<用户名>`（24h TTL）
 4. 构造 `UsernamePasswordAuthenticationToken` 写入 `SecurityContextHolder`。
-5. 兼容兜底：无 JWT 时仍读取旧的 `x-auth-user` 请求头。
+5. 认证只接受 JWT：无有效 token 时该请求按未登录处理（受保护接口返回 401）。
 
 ### 授权：`@PreAuthorize`
 
@@ -180,7 +180,7 @@ K8s 链路（`KubernetesClientFactory` 按 clusterId 缓存 `KubernetesClient`�
 
 ```
 调用方 ─POST /stack/api/v1/deploy {stackId}──▶ StackController
-        x-auth-user: admin                     │
+        Authorization: Bearer <token>          │
                                                ▼
                                    DeployService.deployStack
         @PreAuthorize(ROLE_stack_1_stack_admin)│
@@ -205,8 +205,8 @@ K8s 链路（`KubernetesClientFactory` 按 clusterId 缓存 `KubernetesClient`�
 ### 授权判定
 
 ```
-请求 ──▶ XAuthUserFilter
-         读取 x-auth-user ──▶ UserServiceImpl.loadUserByUsername
+请求 ──▶ JwtAuthenticationFilter
+         解析 Authorization: Bearer <token> ──▶ UserServiceImpl.loadUserByUsername
           ├─ Redis 命中？── 是 ──▶ 反序列化 User（含 authorities）
           └─ 未命中 ──▶ 查库组装 authorities ──▶ 写回 Redis(24h)
           ──▶ SecurityContextHolder.setAuthentication(...)

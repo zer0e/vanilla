@@ -19,17 +19,13 @@ import java.io.IOException;
 
 /**
  * JWT 认证过滤器：在 @PreAuthorize 之前把登录用户名装载进 SecurityContext。
- * 优先解析 {@code Authorization: Bearer <token>}；无 token 时兜底兼容旧 {@code x-auth-user} 请求头
+ * 仅接受 {@code Authorization: Bearer <token>}
  */
 @Component
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String BEARER_PREFIX = "Bearer ";
-    /**
-     * 兼容旧调用方的请求头（过渡期兜底，后续可移除）
-     */
-    private static final String LEGACY_AUTH_HEADER = "x-auth-user";
 
     private final JwtTokenProvider jwtTokenProvider;
     private final UserDetailsService userDetailsService;
@@ -54,21 +50,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 提取登录用户名：优先 JWT subject，其次兼容旧 x-auth-user 头
+     * 提取登录用户名：仅从 Authorization: Bearer <token> 中解析 JWT subject
      */
     private String resolvePrincipal(HttpServletRequest request) {
         String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
-        if (StringUtils.hasText(authorization) && authorization.startsWith(BEARER_PREFIX)) {
-            String token = authorization.substring(BEARER_PREFIX.length()).trim();
-            if (StringUtils.hasText(token)) {
-                try {
-                    return jwtTokenProvider.getUsername(token);
-                } catch (Exception e) {
-                    logger.warn("invalid bearer token, skip auth");
-                    return null;
-                }
-            }
+        if (!StringUtils.hasText(authorization) || !authorization.startsWith(BEARER_PREFIX)) {
+            return null;
         }
-        return request.getHeader(LEGACY_AUTH_HEADER);
+        String token = authorization.substring(BEARER_PREFIX.length()).trim();
+        if (!StringUtils.hasText(token)) {
+            return null;
+        }
+        try {
+            return jwtTokenProvider.getUsername(token);
+        } catch (Exception e) {
+            logger.warn("invalid bearer token, skip auth");
+            return null;
+        }
     }
 }

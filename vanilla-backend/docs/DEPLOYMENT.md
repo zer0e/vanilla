@@ -129,14 +129,19 @@ docker info | grep -A6 "Registry Mirrors"
 
 ## 8. 端到端验证（Docker 部署）
 
-以下流程已在云主机完整跑通。认证均使用 `x-auth-user: admin`。
+以下流程已在云主机完整跑通。认证均使用登录换取的 JWT（`Authorization: Bearer <token>`）。
 
 ### 8.1 冒烟 + 创建集群
 
 ```bash
+# 登录获取 TOKEN（受保护接口均需 Authorization: Bearer <token>）
+TOKEN=$(curl -s -X POST http://localhost:8080/vanilla/auth/api/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{"loginName":"admin","password":"admin123"}' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
 # 创建 DOCKER 集群，连接本机 docker daemon
 curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"clusterName":"docker-test","type":"DOCKER","endpoint":"unix:///var/run/docker.sock","tlsVerify":false}'
 
 # 创建集群自动授予 cluster_admin 并即时失效缓存，无需手动操作
@@ -146,16 +151,16 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 ```bash
 curl -X POST http://localhost:8080/vanilla/stack/api/v1/create \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"clusterId":1,"stackName":"web"}'
 # 创建栈自动授予 stack_admin 并即时失效缓存，无需手动操作
 
 curl -X POST http://localhost:8080/vanilla/service/api/v1/create \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"stackId":1,"serviceName":"nginx","image":"nginx:latest","replicas":2,"cpu":512,"memory":128,"envs":[{"name":"ENV_TEST","value":"hello"}]}'
 
 curl -X POST http://localhost:8080/vanilla/port/api/v1/create \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"stackId":1,"serviceId":1,"protocol":"tcp","port":80}'
 ```
 
@@ -163,7 +168,7 @@ curl -X POST http://localhost:8080/vanilla/port/api/v1/create \
 
 ```bash
 curl -X POST http://localhost:8080/vanilla/stack/api/v1/deploy \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" -d '{"stackId":1}'
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" -d '{"stackId":1}'
 # => status RUNNING, nginx runningCount=2
 
 docker ps   # vanilla-1-nginx-0 (0.0.0.0:80->80/tcp), vanilla-1-nginx-1 (0.0.0.0:81->80/tcp)
@@ -184,7 +189,7 @@ curl -X POST .../stack/api/v1/status -d '{"stackId":1}'   # NONE
 
 ```bash
 curl -X POST http://localhost:8080/vanilla/history/api/v1/list \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"stackId":1,"page":1,"size":20}'
 # 包含 创建栈/创建服务/添加端口/部署栈/停止栈/下架栈 等事件
 ```
@@ -202,7 +207,7 @@ curl -X POST http://localhost:8080/vanilla/history/api/v1/list \
 
 ```bash
 curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"clusterName":"k8s-1","type":"K8S","endpoint":"https://127.0.0.1:6443","tlsVerify":true,"dockerCertPath":"/etc/vanilla/k8s-certs"}'
 # 创建栈自动授予 stack_admin 并即时失效缓存，无需手动操作
 ```

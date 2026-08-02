@@ -61,7 +61,7 @@
       └───────────────────┘   └───────────────────┘   └─────────────────────┘
 ```
 
-> 认证机制：用户名 + 密码经 `POST /auth/api/v1/login` 换取 **JWT**，受保护接口携带 `Authorization: Bearer <token>`；`JwtAuthenticationFilter` 在 `@PreAuthorize` 前将登录用户名及其角色权限装载到 Spring Security 上下文完成鉴权。默认管理员 `admin / admin123`（登录后请修改）。旧 `x-auth-user` 请求头仍兼容（过渡期）。
+> 认证机制：用户名 + 密码经 `POST /auth/api/v1/login` 换取 **JWT**，受保护接口一律携带 `Authorization: Bearer <token>`；`JwtAuthenticationFilter` 在 `@PreAuthorize` 前将登录用户名及其角色权限装载到 Spring Security 上下文完成鉴权。默认管理员 `admin / admin123`（登录后请修改）。
 
 ## 目录结构
 
@@ -139,24 +139,27 @@ java -jar target/vanilla-backend-0.0.1-SNAPSHOT.jar
 ### 4. 调用示例
 
 ```bash
+# 先登录获取 TOKEN（受保护接口均需 Authorization: Bearer <token>）
+TOKEN=$(curl -s -X POST http://localhost:8080/vanilla/auth/api/v1/login   -H "Content-Type: application/json"   -d '{"loginName":"admin","password":"admin123"}' | sed -n 's/.*"token":"\([^"]*\)".*//p')
+
 # 创建 DOCKER 集群（连接本机 docker daemon）
 curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
   -H "Content-Type: application/json" \
-  -H "x-auth-user: admin" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{"clusterName":"docker-1","type":"DOCKER","endpoint":"unix:///var/run/docker.sock","tlsVerify":false}'
 
 # 创建栈 -> 创建服务 -> 添加端口 -> 部署
 curl -X POST http://localhost:8080/vanilla/stack/api/v1/create \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"clusterId":1,"stackName":"web"}'
 curl -X POST http://localhost:8080/vanilla/service/api/v1/create \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"stackId":1,"serviceName":"nginx","image":"nginx:latest","replicas":1,"cpu":512,"memory":128}'
 curl -X POST http://localhost:8080/vanilla/port/api/v1/create \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"stackId":1,"serviceId":1,"protocol":"tcp","port":80}'
 curl -X POST http://localhost:8080/vanilla/stack/api/v1/deploy \
-  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"stackId":1}'
 ```
 
