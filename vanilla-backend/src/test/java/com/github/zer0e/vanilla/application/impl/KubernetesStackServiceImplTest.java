@@ -132,7 +132,7 @@ class KubernetesStackServiceImplTest {
         ArgumentCaptor<Deployment> captor = ArgumentCaptor.forClass(Deployment.class);
         verify(deps.nsOp, atLeastOnce()).resource(captor.capture());
         Deployment deployment = captor.getValue();
-        assertThat(deployment.getMetadata().getName()).isEqualTo("vanilla-1-nginx");
+        assertThat(deployment.getMetadata().getName()).isEqualTo("s1-nginx");
         assertThat(deployment.getMetadata().getLabels().get(Constants.STACK_ID_LABEL)).isEqualTo("1");
         assertThat(deployment.getMetadata().getLabels().get(Constants.SERVICE_ID_LABEL)).isEqualTo("1");
         assertThat(deployment.getSpec().getReplicas()).isEqualTo(2);
@@ -169,9 +169,9 @@ class KubernetesStackServiceImplTest {
         verify(deps.nsOp, atLeastOnce()).resource(captor.capture());
         Deployment deployment = captor.getValue();
         assertThat(deployment.getSpec().getTemplate().getSpec().getVolumes().get(0).getName())
-                .isEqualTo("vanilla-1-1-data");
+                .isEqualTo("s1-1-data");
         assertThat(deployment.getSpec().getTemplate().getSpec().getVolumes().get(0)
-                .getPersistentVolumeClaim().getClaimName()).isEqualTo("vanilla-1-1-data");
+                .getPersistentVolumeClaim().getClaimName()).isEqualTo("s1-1-data");
         assertThat(deployment.getSpec().getTemplate().getSpec().getContainers().get(0)
                 .getVolumeMounts().get(0).getMountPath()).isEqualTo("/data");
     }
@@ -185,11 +185,11 @@ class KubernetesStackServiceImplTest {
         when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(2, "api", 1), service(1, "nginx", 1)));
-        stubDeploymentsList(deployment(1, "vanilla-1-nginx", "1", 1, 1),
-                deployment(2, "vanilla-2-api", "2", 1, 1));
+        stubDeploymentsList(deployment(1, "s1-nginx", "1", 1, 1),
+                deployment(2, "s2-api", "2", 1, 1));
 
         io.fabric8.kubernetes.api.model.Service nodePortSvc = new io.fabric8.kubernetes.api.model.ServiceBuilder()
-                .withNewMetadata().withName("vanilla-1-nginx")
+                .withNewMetadata().withName("s1-nginx")
                 .addToLabels(Constants.STACK_ID_LABEL, "1").addToLabels(Constants.SERVICE_ID_LABEL, "1")
                 .endMetadata()
                 .withNewSpec().withType("NodePort").withClusterIP("192.168.0.1")
@@ -197,7 +197,7 @@ class KubernetesStackServiceImplTest {
                 .endSpec()
                 .build();
         io.fabric8.kubernetes.api.model.Service lbSvc = new io.fabric8.kubernetes.api.model.ServiceBuilder()
-                .withNewMetadata().withName("vanilla-2-api")
+                .withNewMetadata().withName("s2-api")
                 .addToLabels(Constants.STACK_ID_LABEL, "1").addToLabels(Constants.SERVICE_ID_LABEL, "2")
                 .endMetadata()
                 .withNewSpec().withType("LoadBalancer").withClusterIP("10.0.0.5")
@@ -310,7 +310,7 @@ class KubernetesStackServiceImplTest {
         Services s = stubServicesList(Collections.emptyList());
         // 集群上已存在同 spec 的 Service（NodePort 30080）→ 幂等跳过，不重复创建
         io.fabric8.kubernetes.api.model.Service existing = new io.fabric8.kubernetes.api.model.ServiceBuilder()
-                .withNewMetadata().withName("vanilla-1-nginx").endMetadata()
+                .withNewMetadata().withName("s1-nginx").endMetadata()
                 .withNewSpec().withType("NodePort")
                 .addNewPort().withPort(80).withProtocol("TCP").withNodePort(30080)
                 .withTargetPort(new io.fabric8.kubernetes.api.model.IntOrString(80)).endPort()
@@ -318,7 +318,7 @@ class KubernetesStackServiceImplTest {
                 .build();
         io.fabric8.kubernetes.client.dsl.ServiceResource existingRes = mock(
                 io.fabric8.kubernetes.client.dsl.ServiceResource.class);
-        when(s.svcNsOp.withName("vanilla-1-nginx")).thenReturn(existingRes);
+        when(s.svcNsOp.withName("s1-nginx")).thenReturn(existingRes);
         when(existingRes.get()).thenReturn(existing);
 
         kubeStackService.deployStack(new DeployStackDto(1));
@@ -344,7 +344,7 @@ class KubernetesStackServiceImplTest {
         Services s = stubServicesList(Collections.emptyList());
         // 已存在但 NodePort 不同 → 删旧建新
         io.fabric8.kubernetes.api.model.Service stale = new io.fabric8.kubernetes.api.model.ServiceBuilder()
-                .withNewMetadata().withName("vanilla-1-nginx").endMetadata()
+                .withNewMetadata().withName("s1-nginx").endMetadata()
                 .withNewSpec().withType("NodePort")
                 .addNewPort().withPort(80).withProtocol("TCP").withNodePort(30099)
                 .withTargetPort(new io.fabric8.kubernetes.api.model.IntOrString(80)).endPort()
@@ -352,7 +352,7 @@ class KubernetesStackServiceImplTest {
                 .build();
         io.fabric8.kubernetes.client.dsl.ServiceResource staleRes = mock(
                 io.fabric8.kubernetes.client.dsl.ServiceResource.class);
-        when(s.svcNsOp.withName("vanilla-1-nginx")).thenReturn(staleRes);
+        when(s.svcNsOp.withName("s1-nginx")).thenReturn(staleRes);
         when(staleRes.get()).thenReturn(stale);
         when(staleRes.delete()).thenReturn(Collections.emptyList());
 
@@ -399,7 +399,7 @@ class KubernetesStackServiceImplTest {
         // 集群上残留一个已删除服务的 Service（service_id=9 不在现存服务里）
         io.fabric8.kubernetes.api.model.Service stale = new io.fabric8.kubernetes.api.model.ServiceBuilder()
                 .withNewMetadata()
-                .withName("vanilla-9-old")
+                .withName("s9-old")
                 .addToLabels(Constants.STACK_ID_LABEL, "1")
                 .addToLabels(Constants.SERVICE_ID_LABEL, "9")
                 .endMetadata()
@@ -407,7 +407,7 @@ class KubernetesStackServiceImplTest {
         Services s = stubServicesList(List.of(stale));
         io.fabric8.kubernetes.client.dsl.ServiceResource staleRes = mock(
                 io.fabric8.kubernetes.client.dsl.ServiceResource.class);
-        when(s.svcNsOp.withName("vanilla-9-old")).thenReturn(staleRes);
+        when(s.svcNsOp.withName("s9-old")).thenReturn(staleRes);
         when(staleRes.delete()).thenReturn(Collections.emptyList());
 
         kubeStackService.deployStack(new DeployStackDto(1));
@@ -425,8 +425,8 @@ class KubernetesStackServiceImplTest {
         when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(1, "nginx", 2), service(2, "static", 1)));
-        stubDeploymentsList(deployment(1, "vanilla-1-nginx", "1", 2, 2),
-                deployment(2, "vanilla-1-static", "2", 1, 1));
+        stubDeploymentsList(deployment(1, "s1-nginx", "1", 2, 2),
+                deployment(2, "s1-static", "2", 1, 1));
 
         StackStatusVo vo = kubeStackService.getStackStatus(new DeployStackDto(1));
 
@@ -445,8 +445,8 @@ class KubernetesStackServiceImplTest {
         when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
                 .thenReturn(List.of(service(1, "nginx", 2), service(2, "static", 1), service(3, "gone", 1)));
         // nginx 2 目标 1 就绪 → PARTIAL；static 缩放为 0 → STOPPED；gone 无 deployment → NONE
-        stubDeploymentsList(deployment(1, "vanilla-1-nginx", "1", 2, 1),
-                deployment(2, "vanilla-1-static", "2", 0, 0));
+        stubDeploymentsList(deployment(1, "s1-nginx", "1", 2, 1),
+                deployment(2, "s1-static", "2", 0, 0));
 
         StackStatusVo vo = kubeStackService.getStackStatus(new DeployStackDto(1));
 
@@ -467,9 +467,9 @@ class KubernetesStackServiceImplTest {
         when(clusterMapper.selectById(1)).thenReturn(cluster());
         when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
         Deps deps = stubDeployments();
-        stubDeploymentsListOn(deps, deployment(1, "vanilla-1-nginx", "1", 2, 2));
+        stubDeploymentsListOn(deps, deployment(1, "s1-nginx", "1", 2, 2));
         RollableScalableResource scaleResource = mock(RollableScalableResource.class);
-        when(deps.nsOp.withName("vanilla-1-nginx")).thenReturn(scaleResource);
+        when(deps.nsOp.withName("s1-nginx")).thenReturn(scaleResource);
 
         kubeStackService.stopStack(new DeployStackDto(1));
 
@@ -483,9 +483,9 @@ class KubernetesStackServiceImplTest {
         when(clusterMapper.selectById(1)).thenReturn(cluster());
         when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
         Deps deps = stubDeployments();
-        stubDeploymentsListOn(deps, deployment(1, "vanilla-1-nginx", "1", 2, 2));
+        stubDeploymentsListOn(deps, deployment(1, "s1-nginx", "1", 2, 2));
         RollableScalableResource<Deployment> deleteRes = mock(RollableScalableResource.class);
-        when(deps.nsOp.withName("vanilla-1-nginx")).thenReturn(deleteRes);
+        when(deps.nsOp.withName("s1-nginx")).thenReturn(deleteRes);
         when(deleteRes.delete()).thenReturn(Collections.emptyList());
 
         Services s = stubServicesList(Collections.emptyList());
@@ -511,8 +511,8 @@ class KubernetesStackServiceImplTest {
         when(podNs.withLabel(anyString(), anyString())).thenReturn(podNs);
         when(podNs.list()).thenReturn(new PodListBuilder()
                 .withItems(
-                        new PodBuilder().withNewMetadata().withName("vanilla-1-nginx-abc").endMetadata().build(),
-                        new PodBuilder().withNewMetadata().withName("vanilla-1-nginx-def").endMetadata().build())
+                        new PodBuilder().withNewMetadata().withName("s1-nginx-abc").endMetadata().build(),
+                        new PodBuilder().withNewMetadata().withName("s1-nginx-def").endMetadata().build())
                 .build());
         PodResource podRes = mock(PodResource.class);
         when(podNs.resource(any(io.fabric8.kubernetes.api.model.Pod.class))).thenReturn(podRes);
@@ -520,8 +520,8 @@ class KubernetesStackServiceImplTest {
 
         ContainerLogVo vo = kubeStackService.getContainerLog(new ContainerLogsDto(1, 1, 1, 2));
 
-        // 排序后副本 1 → "vanilla-1-nginx-def"，日志截取最后 2 行
-        assertThat(vo.getContainerName()).isEqualTo("vanilla-1-nginx-def");
+        // 排序后副本 1 → "s1-nginx-def"，日志截取最后 2 行
+        assertThat(vo.getContainerName()).isEqualTo("s1-nginx-def");
         assertThat(vo.getLog()).isEqualTo("line3\nline4");
     }
 

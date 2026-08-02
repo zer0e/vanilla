@@ -11,6 +11,8 @@ export default defineConfig({
     }
   },
   server: {
+    // 监听 0.0.0.0，允许局域网/容器内访问（仅开发环境）
+    host: '0.0.0.0',
     port: 5173,
     proxy: {
       '/vanilla': {

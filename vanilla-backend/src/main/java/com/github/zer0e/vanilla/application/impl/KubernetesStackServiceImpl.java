@@ -90,9 +90,9 @@ import java.util.stream.Collectors;
 public class KubernetesStackServiceImpl implements KubernetesStackService {
 
     /**
-     * 栈资源统一命名空间。若集群账号无创建命名空间权限，需预先创建
+     * 栈资源统一命名空间（集群的 default 命名空间，资源不再带 vanilla 前缀）
      */
-    public static final String K8S_NAMESPACE = "vanilla";
+    public static final String K8S_NAMESPACE = "default";
 
     /**
      * NodePort 基础偏移：宿主访问端口 = 声明端口 + 30000（声明端口需 <= 2767 才会映射）
@@ -742,12 +742,16 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
         return labels;
     }
 
+    /**
+     * K8s 资源命名（不再带品牌前缀）。Service 名称要求 DNS-1035 label（必须字母开头），
+     * 故保留单个 's' 前缀：s{stackId}-{serviceName}
+     */
     private String nameOf(Integer stackId, String serviceName) {
-        return sanitize("vanilla-" + stackId + "-" + serviceName);
+        return sanitize("s" + stackId + "-" + serviceName);
     }
 
     private String pvcName(Integer stackId, Integer serviceId, VolumeDo volume) {
-        return sanitize("vanilla-" + stackId + "-" + serviceId + "-" + volume.getVolumeName());
+        return sanitize("s" + stackId + "-" + serviceId + "-" + volume.getVolumeName());
     }
 
     private String sanitize(String name) {

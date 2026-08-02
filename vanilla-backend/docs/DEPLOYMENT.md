@@ -222,7 +222,7 @@ curl -X POST .../stack/api/v1/status -d '{"stackId":1}'   # readyReplicas → RU
 curl -X POST .../stack/api/v1/logs  \
   -d '{"stackId":1,"serviceId":1,"replicaIndex":0,"tail":200}'   # Pod 日志
 
-kubectl -n vanilla get deploy,svc,pvc   # 预期：vanilla-1-nginx / 对应 Service(ClusterIP|NodePort) / PVC
+kubectl -n default get deploy,svc,pvc   # 预期：s1-nginx / 对应 Service(ClusterIP|NodePort) / PVC
 # 声明端口 ≤ 2767 时宿主访问：NodePort = 30000 + 声明端口（如声明 80 → 30080）
 ```
 
@@ -235,7 +235,7 @@ kubectl -n vanilla get deploy,svc,pvc   # 预期：vanilla-1-nginx / 对应 Serv
 | CPU | Docker CPU shares 按 m 近似映射（1024 = 1 vCPU），非精确对应 |
 | 宿主端口 | NodePort 受 30000–32767 限制，仅「声明端口 ≤ 2767」映射；多副本不再逐副本偏移（由集群分发） |
 | HTTP 同步等待 | 部署接口不阻塞等待滚动完成，就绪状态由 status/healthyCount 轮询体现 |
-| 命名空间 | 统一 `vanilla`（代码常量 `K8S_NAMESPACE`），暂不可配置 |
+| 命名空间 | 统一 `default`（代码常量 `K8S_NAMESPACE`），暂不可配置 |
 
 ## 10. 常见问题
 
