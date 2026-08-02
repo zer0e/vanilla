@@ -139,7 +139,7 @@ deployStack(stackId)
 K8s 链路（`KubernetesClientFactory` 按 clusterId 缓存 `KubernetesClient`）：
 
 ```
-栈(kubernetes) → default 命名空间
+栈(kubernetes) → 命名空间=栈名（栈名集群内唯一）
   ├─ 服务 → Deployment（标签 com.vanilla.stack_id / service_id 分组）
   ├─ 端口 → Service（ClusterIP；声明端口 ≤ 2767 附加 NodePort 30000+端口）
   ├─ 卷   → PVC（ReadWriteOnce；下架保留）

@@ -222,7 +222,7 @@ curl -X POST .../stack/api/v1/status -d '{"stackId":1}'   # readyReplicas → RU
 curl -X POST .../stack/api/v1/logs  \
   -d '{"stackId":1,"serviceId":1,"replicaIndex":0,"tail":200}'   # Pod 日志
 
-kubectl -n default get deploy,svc,pvc   # 预期：s1-nginx / 对应 Service(ClusterIP|NodePort) / PVC
+kubectl -n <栈名> get deploy,svc,pvc   # 预期：nginx / 对应 Service(ClusterIP|NodePort) / PVC（命名空间=栈名）
 # 声明端口 ≤ 2767 时宿主访问：NodePort = 30000 + 声明端口（如声明 80 → 30080）
 ```
 

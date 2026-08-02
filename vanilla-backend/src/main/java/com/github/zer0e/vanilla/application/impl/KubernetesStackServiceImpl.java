@@ -31,8 +31,8 @@ import io.fabric8.kubernetes.api.model.ContainerPort;
 import io.fabric8.kubernetes.api.model.ContainerPortBuilder;
 import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.EnvVarBuilder;
-import io.fabric8.kubernetes.api.model.IntOrString;
 import io.fabric8.kubernetes.api.model.HasMetadata;
+import io.fabric8.kubernetes.api.model.IntOrString;
 import io.fabric8.kubernetes.api.model.LabelSelectorBuilder;
 import io.fabric8.kubernetes.api.model.LoadBalancerIngress;
 import io.fabric8.kubernetes.api.model.NamespaceBuilder;
@@ -80,19 +80,16 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Kubernetes 运行时实现：栈 → Deployment + Service（NodePort），卷 → PVC。
- * 资源统一落在 {@link #K8S_NAMESPACE} 命名空间，用同 Docker 的标签体系分组。
- * 同步 createOrReplace，不支持在 HTTP 请求内等待滚动完成，就绪状态由 status 查询体现
+ * Kubernetes 运行时实现：**一个栈 = 一个命名空间**。
+ *
+ * <p>命名空间名取自栈名（栈在集群内唯一），Deployment / Service 名 = 服务名（栈内唯一，
+ * 且因命名空间隔离不会跨栈冲突），PVC 名 = 服务名-卷名（卷名仅按服务唯一）。停止 scale=0、
+ * 下架删 Deployment+Service 保留 PVC 与命名空间。
  */
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class KubernetesStackServiceImpl implements KubernetesStackService {
-
-    /**
-     * 栈资源统一命名空间（集群的 default 命名空间，资源不再带 vanilla 前缀）
-     */
-    public static final String K8S_NAMESPACE = "default";
 
     /**
      * NodePort 基础偏移：宿主访问端口 = 声明端口 + 30000（声明端口需 <= 2767 才会映射）
@@ -129,20 +126,22 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     public StackStatusVo deployStack(DeployStackDto deployStackDto) throws BusinessException {
         StackDo stack = getStack(deployStackDto.getStackId());
         KubernetesClient client = kubernetesClientFactory.getClient(getCluster(stack.getClusterId()));
-        ensureNamespace(client);
+        String namespace = namespaceOf(stack);
+        ensureNamespace(client, stack);
         List<ServiceDo> services = serviceMapper.selectServicesByStackIdAndSearch(stack.getId(), null);
         try {
             for (ServiceDo service : services) {
                 List<PortDo> ports = portMapper.selectPortsByServiceId(service.getId());
                 List<VolumeDo> volumes = volumeMapper.selectVolumesByServiceIdAndSearch(service.getId(), null);
-                ensurePvc(client, stack.getId(), service, volumes);
-                upsertService(client, stack.getId(), service, ports);
-                upsertDeployment(client, stack.getId(), service, ports, volumes);
-                log.info("k8s upsert deployment done, stackId={}, service={}", stack.getId(), service.getServiceName());
+                ensurePvc(client, namespace, stack.getId(), service, volumes);
+                upsertService(client, namespace, stack.getId(), service, ports);
+                upsertDeployment(client, namespace, stack.getId(), service, ports, volumes);
+                log.info("k8s upsert deployment done, ns={}, stackId={}, service={}",
+                        namespace, stack.getId(), service.getServiceName());
             }
             // 清理已删除服务的残留资源（Deployment + Service；PVC 保留）
-            removeOrphanDeployments(client, stack.getId(), services);
-            removeOrphanServices(client, stack.getId(), services);
+            removeOrphanDeployments(client, namespace, stack.getId(), services);
+            removeOrphanServices(client, namespace, stack.getId(), services);
         } catch (Exception e) {
             log.error("k8s deploy stack err, stackId={}", stack.getId(), e);
             throw new BusinessException(Constants.DEPLOY_FAIL + "：" + e.getMessage());
@@ -158,7 +157,8 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     public StackStatusVo getStackStatus(DeployStackDto deployStackDto) throws BusinessException {
         StackDo stack = getStack(deployStackDto.getStackId());
         KubernetesClient client = kubernetesClientFactory.getClient(getCluster(stack.getClusterId()));
-        List<Deployment> deployments = listStackDeployments(client, stack.getId());
+        String namespace = namespaceOf(stack);
+        List<Deployment> deployments = listStackDeployments(client, namespace, stack.getId());
         Map<String, Deployment> byService = new HashMap<>();
         for (Deployment deployment : deployments) {
             String serviceId = labelOf(deployment, Constants.SERVICE_ID_LABEL);
@@ -169,7 +169,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
         List<ServiceDo> services = serviceMapper.selectServicesByStackIdAndSearch(stack.getId(), null);
         // 暴露地址：按 Service 资源回填（NodePort → 节点IP:nodePort，LoadBalancer → externalIP，ClusterIP → 集群内地址）
         Map<String, io.fabric8.kubernetes.api.model.Service> svcByServiceId = new HashMap<>();
-        for (io.fabric8.kubernetes.api.model.Service svc : listStackServices(client, stack.getId())) {
+        for (io.fabric8.kubernetes.api.model.Service svc : listStackServices(client, namespace, stack.getId())) {
             String sid = labelOf(svc, Constants.SERVICE_ID_LABEL);
             if (sid != null) {
                 svcByServiceId.put(sid, svc);
@@ -211,8 +211,9 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     public void stopStack(DeployStackDto deployStackDto) throws BusinessException {
         StackDo stack = getStack(deployStackDto.getStackId());
         KubernetesClient client = kubernetesClientFactory.getClient(getCluster(stack.getClusterId()));
-        for (Deployment deployment : listStackDeployments(client, stack.getId())) {
-            client.apps().deployments().inNamespace(K8S_NAMESPACE)
+        String namespace = namespaceOf(stack);
+        for (Deployment deployment : listStackDeployments(client, namespace, stack.getId())) {
+            client.apps().deployments().inNamespace(namespace)
                     .withName(deployment.getMetadata().getName()).scale(0);
         }
         recordHistory(stack.getId(), "停止栈 " + stack.getStackName());
@@ -223,14 +224,15 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     public void removeStack(DeployStackDto deployStackDto) throws BusinessException {
         StackDo stack = getStack(deployStackDto.getStackId());
         KubernetesClient client = kubernetesClientFactory.getClient(getCluster(stack.getClusterId()));
-        // Deployment 与 Service 删除；PVC 保留（与 Docker named volume 下架保留的语义一致）
-        for (Deployment deployment : listStackDeployments(client, stack.getId())) {
-            client.apps().deployments().inNamespace(K8S_NAMESPACE)
+        String namespace = namespaceOf(stack);
+        // Deployment 与 Service 删除；PVC 与命名空间保留（与 Docker named volume 下架保留的语义一致）
+        for (Deployment deployment : listStackDeployments(client, namespace, stack.getId())) {
+            client.apps().deployments().inNamespace(namespace)
                     .withName(deployment.getMetadata().getName()).delete();
         }
-        for (io.fabric8.kubernetes.api.model.Service kubeService : client.services().inNamespace(K8S_NAMESPACE)
+        for (io.fabric8.kubernetes.api.model.Service kubeService : client.services().inNamespace(namespace)
                 .withLabel(Constants.STACK_ID_LABEL, String.valueOf(stack.getId())).list().getItems()) {
-            client.services().inNamespace(K8S_NAMESPACE).withName(kubeService.getMetadata().getName()).delete();
+            client.services().inNamespace(namespace).withName(kubeService.getMetadata().getName()).delete();
         }
         recordHistory(stack.getId(), "下架栈 " + stack.getStackName());
     }
@@ -242,7 +244,8 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     public ContainerLogVo getContainerLog(ContainerLogsDto containerLogsDto) throws BusinessException {
         StackDo stack = getStack(containerLogsDto.getStackId());
         KubernetesClient client = kubernetesClientFactory.getClient(getCluster(stack.getClusterId()));
-        List<Pod> pods = client.pods().inNamespace(K8S_NAMESPACE)
+        String namespace = namespaceOf(stack);
+        List<Pod> pods = client.pods().inNamespace(namespace)
                 .withLabel(Constants.STACK_ID_LABEL, String.valueOf(stack.getId()))
                 .withLabel(Constants.SERVICE_ID_LABEL, String.valueOf(containerLogsDto.getServiceId()))
                 .list().getItems();
@@ -259,7 +262,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
         } else {
             target = sorted.stream().filter(this::isReady).findFirst().orElse(sorted.get(0));
         }
-        String fullLog = client.pods().inNamespace(K8S_NAMESPACE).resource(target).getLog();
+        String fullLog = client.pods().inNamespace(namespace).resource(target).getLog();
         int tail = containerLogsDto.getTail() == null
                 ? DEFAULT_LOG_TAIL
                 : Math.min(Math.max(containerLogsDto.getTail(), 1), MAX_LOG_TAIL);
@@ -273,19 +276,20 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
 
     // ---------- 资源构建 ----------
 
-    private void upsertDeployment(KubernetesClient client, Integer stackId, ServiceDo service,
+    private void upsertDeployment(KubernetesClient client, String namespace, Integer stackId, ServiceDo service,
                                   List<PortDo> ports, List<VolumeDo> volumes) {
         Map<String, String> labels = deploymentLabels(stackId, service);
+        String deploymentName = resourceName(service.getServiceName());
         List<String> command = commandTokens(service);
         int replicas = service.getReplicas() == null ? 1 : Math.max(1, service.getReplicas());
 
         ContainerBuilder containerBuilder = new ContainerBuilder()
-                .withName(sanitize(service.getServiceName()))
+                .withName(deploymentName)
                 .withImage(service.getImage())
                 .withEnv(buildEnvVars(service))
                 .withPorts(buildContainerPorts(ports))
                 .withResources(buildResources(service))
-                .withVolumeMounts(buildVolumeMounts(stackId, service.getId(), volumes))
+                .withVolumeMounts(buildVolumeMounts(service.getServiceName(), volumes))
                 .withReadinessProbe(buildProbe(service))
                 .withLivenessProbe(buildProbe(service));
         if (!CollectionUtils.isEmpty(command)) {
@@ -296,7 +300,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
 
         Deployment deployment = new DeploymentBuilder()
                 .withNewMetadata()
-                .withName(nameOf(stackId, service.getServiceName()))
+                .withName(deploymentName)
                 .withLabels(labels)
                 .endMetadata()
                 .withNewSpec()
@@ -307,20 +311,21 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
                         .withNewMetadata().withLabels(labels).endMetadata()
                         .withSpec(new PodSpecBuilder()
                                 .withContainers(container)
-                                .withVolumes(buildVolumes(stackId, service.getId(), volumes))
+                                .withVolumes(buildVolumes(service.getServiceName(), volumes))
                                 .build())
                         .build())
                 .endSpec()
                 .build();
 
-        client.apps().deployments().inNamespace(K8S_NAMESPACE).resource(deployment).createOrReplace();
+        client.apps().deployments().inNamespace(namespace).resource(deployment).createOrReplace();
     }
 
     /**
      * 幂等维护 Service：NodePort 槽位与端口在创建后不可直接替换（createOrReplace 会报
      * "nodePort already allocated"），故已存在且 spec 一致时跳过，仅 spec 变化才删旧建新
      */
-    private void upsertService(KubernetesClient client, Integer stackId, ServiceDo service, List<PortDo> ports) {
+    private void upsertService(KubernetesClient client, String namespace, Integer stackId, ServiceDo service,
+                               List<PortDo> ports) {
         if (CollectionUtils.isEmpty(ports)) {
             // 无端口声明的服务不创建 Service——等价 Docker 下无端口映射的容器，避免 k8s 报 spec.ports Required
             log.info("skip k8s service creation, no ports declared, stackId={}, service={}",
@@ -360,7 +365,7 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
 
         io.fabric8.kubernetes.api.model.Service serviceResource = new ServiceBuilder()
                 .withNewMetadata()
-                .withName(nameOf(stackId, service.getServiceName()))
+                .withName(resourceName(service.getServiceName()))
                 .withLabels(labels)
                 .endMetadata()
                 .withNewSpec()
@@ -372,16 +377,16 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
 
         String name = serviceResource.getMetadata().getName();
         io.fabric8.kubernetes.api.model.Service existing =
-                client.services().inNamespace(K8S_NAMESPACE).withName(name).get();
+                client.services().inNamespace(namespace).withName(name).get();
         if (existing != null) {
             if (!sameServiceSpec(existing, serviceResource)) {
                 log.info("service spec changed, recreate k8s service, name={}", name);
-                client.services().inNamespace(K8S_NAMESPACE).withName(name).delete();
-                client.services().inNamespace(K8S_NAMESPACE).resource(serviceResource).create();
+                client.services().inNamespace(namespace).withName(name).delete();
+                client.services().inNamespace(namespace).resource(serviceResource).create();
             }
             return;
         }
-        client.services().inNamespace(K8S_NAMESPACE).resource(serviceResource).create();
+        client.services().inNamespace(namespace).resource(serviceResource).create();
     }
 
     /**
@@ -440,30 +445,35 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     }
 
     /**
-     * 栈资源统一命名空间不存在时自动创建（无权限则忽略，需预先准备）
+     * 栈命名空间不存在时自动创建（无权限则忽略，需预先准备）
      */
-    private void ensureNamespace(KubernetesClient client) {
-        if (client.namespaces().withName(K8S_NAMESPACE).get() != null) {
+    private void ensureNamespace(KubernetesClient client, StackDo stack) {
+        String namespace = namespaceOf(stack);
+        if (client.namespaces().withName(namespace).get() != null) {
             return;
         }
         try {
             client.namespaces().resource(new NamespaceBuilder()
-                    .withNewMetadata().withName(K8S_NAMESPACE).endMetadata().build()).create();
+                    .withNewMetadata()
+                    .withName(namespace)
+                    .addToLabels(Constants.STACK_ID_LABEL, String.valueOf(stack.getId()))
+                    .endMetadata().build()).create();
         } catch (Exception e) {
-            log.warn("create namespace err (may lack permission), ns={}", K8S_NAMESPACE, e);
+            log.warn("create namespace err (may lack permission), ns={}", namespace, e);
         }
     }
 
     /**
      * 确保服务的 PVC 存在（幂等）。下架时不删除，与 Docker named volume 语义对齐
      */
-    private void ensurePvc(KubernetesClient client, Integer stackId, ServiceDo service, List<VolumeDo> volumes) {
+    private void ensurePvc(KubernetesClient client, String namespace, Integer stackId, ServiceDo service,
+                           List<VolumeDo> volumes) {
         if (CollectionUtils.isEmpty(volumes)) {
             return;
         }
         for (VolumeDo volume : volumes) {
-            String name = pvcName(stackId, service.getId(), volume);
-            if (client.persistentVolumeClaims().inNamespace(K8S_NAMESPACE).withName(name).get() != null) {
+            String name = pvcName(service.getServiceName(), volume);
+            if (client.persistentVolumeClaims().inNamespace(namespace).withName(name).get() != null) {
                 continue;
             }
             PersistentVolumeClaim pvc = new PersistentVolumeClaimBuilder()
@@ -479,38 +489,40 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
                     .endSpec()
                     .build();
             try {
-                client.persistentVolumeClaims().inNamespace(K8S_NAMESPACE).resource(pvc).create();
+                client.persistentVolumeClaims().inNamespace(namespace).resource(pvc).create();
             } catch (Exception e) {
                 log.warn("create pvc err, name={}", name, e);
             }
         }
     }
 
-    private void removeOrphanDeployments(KubernetesClient client, Integer stackId, List<ServiceDo> services) {
+    private void removeOrphanDeployments(KubernetesClient client, String namespace, Integer stackId,
+                                         List<ServiceDo> services) {
         Set<String> serviceIds = services.stream().map(s -> String.valueOf(s.getId())).collect(Collectors.toSet());
-        for (Deployment deployment : listStackDeployments(client, stackId)) {
+        for (Deployment deployment : listStackDeployments(client, namespace, stackId)) {
             String serviceId = labelOf(deployment, Constants.SERVICE_ID_LABEL);
             if (serviceId == null || !serviceIds.contains(serviceId)) {
-                client.apps().deployments().inNamespace(K8S_NAMESPACE)
+                client.apps().deployments().inNamespace(namespace)
                         .withName(deployment.getMetadata().getName()).delete();
             }
         }
     }
 
-    private void removeOrphanServices(KubernetesClient client, Integer stackId, List<ServiceDo> services) {
+    private void removeOrphanServices(KubernetesClient client, String namespace, Integer stackId,
+                                      List<ServiceDo> services) {
         Set<String> serviceIds = services.stream().map(s -> String.valueOf(s.getId())).collect(Collectors.toSet());
-        for (io.fabric8.kubernetes.api.model.Service svc : client.services().inNamespace(K8S_NAMESPACE)
+        for (io.fabric8.kubernetes.api.model.Service svc : client.services().inNamespace(namespace)
                 .withLabel(Constants.STACK_ID_LABEL, String.valueOf(stackId)).list().getItems()) {
             String serviceId = svc.getMetadata() != null && svc.getMetadata().getLabels() != null
                     ? svc.getMetadata().getLabels().get(Constants.SERVICE_ID_LABEL) : null;
             if (serviceId == null || !serviceIds.contains(serviceId)) {
-                client.services().inNamespace(K8S_NAMESPACE).withName(svc.getMetadata().getName()).delete();
+                client.services().inNamespace(namespace).withName(svc.getMetadata().getName()).delete();
             }
         }
     }
 
-    private List<Deployment> listStackDeployments(KubernetesClient client, Integer stackId) {
-        return client.apps().deployments().inNamespace(K8S_NAMESPACE)
+    private List<Deployment> listStackDeployments(KubernetesClient client, String namespace, Integer stackId) {
+        return client.apps().deployments().inNamespace(namespace)
                 .withLabel(Constants.STACK_ID_LABEL, String.valueOf(stackId))
                 .list().getItems();
     }
@@ -525,17 +537,18 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     /**
      * 拉取栈下对应 Service 资源（无则空列表）
      */
-    private List<io.fabric8.kubernetes.api.model.Service> listStackServices(KubernetesClient client, Integer stackId) {
+    private List<io.fabric8.kubernetes.api.model.Service> listStackServices(KubernetesClient client,
+                                                                            String namespace, Integer stackId) {
         try {
             var op = client.services();
             if (op == null) {
                 return Collections.emptyList();
             }
-            return op.inNamespace(K8S_NAMESPACE)
+            return op.inNamespace(namespace)
                     .withLabel(Constants.STACK_ID_LABEL, String.valueOf(stackId))
                     .list().getItems();
         } catch (Exception e) {
-            log.warn("list stack services err, stackId={}", stackId, e);
+            log.warn("list stack services err, ns={}, stackId={}", namespace, stackId, e);
             return Collections.emptyList();
         }
     }
@@ -680,12 +693,12 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
         return new ResourceRequirementsBuilder().withRequests(requests).withLimits(limits).build();
     }
 
-    private List<Volume> buildVolumes(Integer stackId, Integer serviceId, List<VolumeDo> volumes) {
+    private List<Volume> buildVolumes(String serviceName, List<VolumeDo> volumes) {
         if (CollectionUtils.isEmpty(volumes)) {
             return Collections.emptyList();
         }
         return volumes.stream().map(v -> {
-            String name = pvcName(stackId, serviceId, v);
+            String name = pvcName(serviceName, v);
             return new VolumeBuilder()
                     .withName(name)
                     .withNewPersistentVolumeClaim().withClaimName(name).endPersistentVolumeClaim()
@@ -693,13 +706,13 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
         }).toList();
     }
 
-    private List<VolumeMount> buildVolumeMounts(Integer stackId, Integer serviceId, List<VolumeDo> volumes) {
+    private List<VolumeMount> buildVolumeMounts(String serviceName, List<VolumeDo> volumes) {
         if (CollectionUtils.isEmpty(volumes)) {
             return Collections.emptyList();
         }
         return volumes.stream()
                 .map(v -> new VolumeMountBuilder()
-                        .withName(pvcName(stackId, serviceId, v))
+                        .withName(pvcName(serviceName, v))
                         .withMountPath(v.getMountPath())
                         .build())
                 .toList();
@@ -743,15 +756,34 @@ public class KubernetesStackServiceImpl implements KubernetesStackService {
     }
 
     /**
-     * K8s 资源命名（不再带品牌前缀）。Service 名称要求 DNS-1035 label（必须字母开头），
-     * 故保留单个 's' 前缀：s{stackId}-{serviceName}
+     * K8s 资源名 = 服务名（不含任何前缀）：一个栈一个命名空间，服务名在栈内唯一，
+     * 命名空间隔离保证跨栈不冲突（Service 名称还须满足 DNS-1035 字母开头，由 sanitize 兜底）
      */
-    private String nameOf(Integer stackId, String serviceName) {
-        return sanitize("s" + stackId + "-" + serviceName);
+    private String resourceName(String serviceName) {
+        return sanitize(serviceName);
     }
 
-    private String pvcName(Integer stackId, Integer serviceId, VolumeDo volume) {
-        return sanitize("s" + stackId + "-" + serviceId + "-" + volume.getVolumeName());
+    /**
+     * PVC 名 = 服务名-卷名（卷名仅按服务唯一，加服务名前缀保证栈内命名空间不冲突）
+     */
+    private String pvcName(String serviceName, VolumeDo volume) {
+        return sanitize(serviceName + "-" + volume.getVolumeName());
+    }
+
+    /**
+     * 栈命名空间名 = 栈名清洗后的 DNS-1123 label（小写字母/数字/连字符，≤63 字符；
+     * 栈名在同集群唯一 → 命名空间在该集群唯一）
+     */
+    private String namespaceOf(StackDo stack) {
+        String name = stack.getStackName() == null ? "" : stack.getStackName().toLowerCase();
+        name = name.replaceAll("[^a-z0-9-]", "-").replaceAll("-+", "-").replaceAll("(^-|-$)", "");
+        if (name.length() > 63) {
+            name = name.substring(0, 63).replaceAll("-+$", "");
+        }
+        if (!StringUtils.hasText(name)) {
+            name = "stack-" + stack.getId();
+        }
+        return name;
     }
 
     private String sanitize(String name) {
