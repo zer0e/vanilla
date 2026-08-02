@@ -17,3 +17,6 @@ export const stackStatus = (stackId, options = {}) =>
 export const stopStack = (stackId) => request.post('/stack/api/v1/stop', { stackId })
 
 export const removeStack = (stackId) => request.post('/stack/api/v1/remove', { stackId })
+
+// 查看服务某个副本容器的最近日志
+export const getContainerLog = (data) => request.post('/stack/api/v1/logs', data)

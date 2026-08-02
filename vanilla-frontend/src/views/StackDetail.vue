@@ -8,6 +8,15 @@
         <h2>栈：{{ stackName }} 详情</h2>
       </div>
       <div class="header-right">
+        <el-button type="success" :loading="deploying" @click="handleDeploy">
+          <el-icon><Upload /></el-icon>&nbsp;部署
+        </el-button>
+        <el-button type="warning" :loading="stopping" @click="handleStop">
+          <el-icon><VideoPause /></el-icon>&nbsp;停止
+        </el-button>
+        <el-button type="danger" :loading="removing" @click="handleRemove">
+          <el-icon><Delete /></el-icon>&nbsp;下架
+        </el-button>
         <el-button @click="refreshStatus">
           <el-icon><Refresh /></el-icon>&nbsp;刷新状态
         </el-button>
@@ -121,8 +130,9 @@
               </template>
             </el-table-column>
             <el-table-column prop="strategy" label="策略" width="110" />
-            <el-table-column label="操作" width="140" fixed="right">
+            <el-table-column label="操作" width="190" fixed="right">
               <template #default="{ row }">
+                <el-button type="info" link @click="openLogDialog(row)">日志</el-button>
                 <el-button type="primary" link @click="openServiceDialog(row)">编辑</el-button>
                 <el-button type="danger" link @click="handleDeleteService(row)">删除</el-button>
               </template>
@@ -230,6 +240,14 @@
             </el-form-item>
           </el-col>
           <el-col :span="24">
+            <el-form-item label="健康检查命令">
+              <el-input
+                v-model="serviceForm.healthCheckCmd"
+                placeholder="如 curl -f http://localhost:8080/health || exit 1（配置后容器启用 Docker HEALTHCHECK）"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="24">
             <el-form-item label="启动命令">
               <el-input v-model="serviceForm.command" placeholder="按空白拆分，如 nginx -g" />
             </el-form-item>
@@ -320,11 +338,47 @@
         <el-button type="primary" :loading="savingVolume" @click="saveVolume">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 容器日志对话框 -->
+    <el-dialog v-model="logDialogVisible" title="查看容器日志" width="840px" destroy-on-close>
+      <template v-if="logService">
+        <div class="log-toolbar">
+          <span class="log-service">
+            服务：{{ logService.serviceName }}
+            <el-tag size="small" class="log-image">{{ logService.image }}</el-tag>
+          </span>
+          <el-select
+            v-if="logReplicas > 1"
+            v-model="logForm.replicaIndex"
+            placeholder="副本"
+            style="width: 120px"
+          >
+            <el-option v-for="i in logReplicas" :key="i - 1" :label="`副本 ${i - 1}`" :value="i - 1" />
+          </el-select>
+          <el-input-number v-model="logForm.tail" :min="1" :max="10000" style="width: 130px" />
+          <span class="text-muted">行数</span>
+          <el-button type="primary" :loading="logLoading" @click="refreshLog">
+            <el-icon><Refresh /></el-icon>&nbsp;刷新
+          </el-button>
+          <el-button @click="copyLog">
+            <el-icon><CopyDocument /></el-icon>&nbsp;复制
+          </el-button>
+        </div>
+        <el-alert
+          v-if="!logLoading && !logContent && (logError || logMeta)"
+          :title="logError || `容器 ${logMeta} 暂无日志输出`"
+          type="info"
+          :closable="false"
+          class="log-alert"
+        />
+        <pre class="log-body" v-loading="logLoading">{{ logContent }}</pre>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -336,7 +390,13 @@ import {
 import { createPort, updatePort, deletePort } from '@/api/port'
 import { createVolume, updateVolume, deleteVolume } from '@/api/volume'
 import { getHistory } from '@/api/history'
-import { stackStatus } from '@/api/stack'
+import {
+  stackStatus,
+  deployStack,
+  stopStack,
+  removeStack,
+  getContainerLog
+} from '@/api/stack'
 import { statusMeta } from '@/utils/constants'
 
 const route = useRoute()
@@ -355,6 +415,128 @@ const refreshStatus = async () => {
     }
   } catch (e) {
     // 静默
+  }
+}
+
+// ---------- 生命周期操作（部署 / 停止 / 下架） ----------
+const deploying = ref(false)
+const stopping = ref(false)
+const removing = ref(false)
+
+const handleDeploy = () => {
+  ElMessageBox.confirm(
+    `确定部署栈「${stackName.value}」吗？将拉取镜像并按策略创建/替换容器。`,
+    '部署确认',
+    { confirmButtonText: '部署', cancelButtonText: '取消' }
+  )
+    .then(async () => {
+      deploying.value = true
+      try {
+        const res = await deployStack(stackId)
+        if (res?.status) {
+          stackStatusName.value = res.status
+        }
+        ElMessage.success(`部署成功，当前状态：${statusMeta(res?.status).label}`)
+      } catch (e) {
+        // 拦截器已提示（如端口冲突）
+      } finally {
+        deploying.value = false
+      }
+    })
+    .catch(() => {})
+}
+
+const handleStop = () => {
+  ElMessageBox.confirm(
+    `确定停止栈「${stackName.value}」下所有容器吗？`,
+    '停止确认',
+    { confirmButtonText: '停止', cancelButtonText: '取消' }
+  )
+    .then(async () => {
+      stopping.value = true
+      try {
+        await stopStack(stackId)
+        ElMessage.success('栈已停止')
+        await refreshStatus()
+      } catch (e) {
+        // 拦截器已提示
+      } finally {
+        stopping.value = false
+      }
+    })
+    .catch(() => {})
+}
+
+const handleRemove = () => {
+  ElMessageBox.confirm(
+    `确定下架栈「${stackName.value}」吗？将删除栈下所有容器（含停止的）。`,
+    '下架确认',
+    { confirmButtonText: '下架', cancelButtonText: '取消', type: 'warning' }
+  )
+    .then(async () => {
+      removing.value = true
+      try {
+        await removeStack(stackId)
+        ElMessage.success('栈已下架')
+        await refreshStatus()
+      } catch (e) {
+        // 拦截器已提示
+      } finally {
+        removing.value = false
+      }
+    })
+    .catch(() => {})
+}
+
+// ---------- 容器日志 ----------
+const logDialogVisible = ref(false)
+const logLoading = ref(false)
+const logContent = ref('')
+const logMeta = ref('')
+const logError = ref('')
+const logService = ref(null)
+const logForm = reactive({ replicaIndex: 0, tail: 500 })
+const logReplicas = computed(() => Math.max(1, logService.value?.replicas ?? 1))
+
+const openLogDialog = (service) => {
+  logService.value = service
+  logForm.replicaIndex = 0
+  logForm.tail = 500
+  logContent.value = ''
+  logMeta.value = ''
+  logError.value = ''
+  logDialogVisible.value = true
+  refreshLog()
+}
+
+const refreshLog = async () => {
+  if (!logService.value) return
+  logLoading.value = true
+  try {
+    const res = await getContainerLog({
+      stackId,
+      serviceId: logService.value.id,
+      replicaIndex: logReplicas.value > 1 ? logForm.replicaIndex : undefined,
+      tail: logForm.tail
+    })
+    logContent.value = res?.log ?? ''
+    logMeta.value = res?.containerName ? `${res.containerName}（${res.containerId}）` : ''
+    logError.value = ''
+  } catch (e) {
+    logContent.value = ''
+    logMeta.value = ''
+    logError.value = e?.message || '读取日志失败'
+  } finally {
+    logLoading.value = false
+  }
+}
+
+const copyLog = async () => {
+  try {
+    await navigator.clipboard.writeText(logContent.value)
+    ElMessage.success('已复制')
+  } catch (e) {
+    ElMessage.error('复制失败')
   }
 }
 
@@ -423,6 +605,7 @@ function defaultServiceForm() {
     memory: null,
     hostname: '',
     terminationGracePeriodSeconds: '',
+    healthCheckCmd: '',
     strategy: 'Recreate',
     envs: []
   }
@@ -442,6 +625,7 @@ const openServiceDialog = (row) => {
       memory: row.memory,
       hostname: row.hostname || '',
       terminationGracePeriodSeconds: row.terminationGracePeriodSeconds || '',
+      healthCheckCmd: row.healthCheckCmd || '',
       strategy: row.strategy || 'Recreate',
       envs: (row.envs || []).map((e) => ({ ...e }))
     }
@@ -733,5 +917,43 @@ onMounted(() => {
 
 .env-list .env-add {
   margin-top: 4px;
+}
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.log-service {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.log-image {
+  max-width: 220px;
+}
+
+.log-alert {
+  margin-bottom: 10px;
+}
+
+.log-body {
+  min-height: 320px;
+  max-height: 480px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  background-color: #0d1117;
+  color: #c9d1d9;
+  border-radius: 4px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 </style>

@@ -92,8 +92,51 @@
         <el-form-item label="TLS 校验">
           <el-switch v-model="form.tlsVerify" />
         </el-form-item>
-        <el-form-item v-if="form.tlsVerify" label="证书目录">
-          <el-input v-model="form.dockerCertPath" placeholder="Docker TLS 证书目录" />
+        <el-form-item v-if="form.tlsVerify" label="TLS 证书">
+          <div class="cert-uploads">
+            <div class="cert-item">
+              <span class="cert-label">CA 证书</span>
+              <el-upload
+                :auto-upload="false"
+                :show-file-list="false"
+                accept=".pem,.crt,.cer,text/plain"
+                :on-change="(f) => onCertChange(f, 'caCert', 'caCertName')"
+              >
+                <el-button size="small" :type="form.caCertName ? 'success' : 'primary'">
+                  {{ form.caCertName || '选择 CA 证书' }}
+                </el-button>
+              </el-upload>
+            </div>
+            <div class="cert-item">
+              <span class="cert-label">客户端证书</span>
+              <el-upload
+                :auto-upload="false"
+                :show-file-list="false"
+                accept=".pem,.crt,.cer,text/plain"
+                :on-change="(f) => onCertChange(f, 'clientCert', 'clientCertName')"
+              >
+                <el-button size="small" :type="form.clientCertName ? 'success' : 'primary'">
+                  {{ form.clientCertName || '选择客户端证书' }}
+                </el-button>
+              </el-upload>
+            </div>
+            <div class="cert-item">
+              <span class="cert-label">客户端私钥</span>
+              <el-upload
+                :auto-upload="false"
+                :show-file-list="false"
+                accept=".pem,.key,text/plain"
+                :on-change="(f) => onCertChange(f, 'clientKey', 'clientKeyName')"
+              >
+                <el-button size="small" :type="form.clientKeyName ? 'success' : 'primary'">
+                  {{ form.clientKeyName || '选择客户端私钥' }}
+                </el-button>
+              </el-upload>
+            </div>
+            <p class="cert-hint">
+              证书内容会随集群保存到数据库（TLS 连接时自动使用）；编辑时不展示原文，需更换重新选择即可。
+            </p>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -137,7 +180,32 @@ function defaultForm() {
     type: 'DOCKER',
     endpoint: '',
     tlsVerify: false,
-    dockerCertPath: ''
+    dockerCertPath: '',
+    caCert: '',
+    clientCert: '',
+    clientKey: '',
+    caCertName: '',
+    clientCertName: '',
+    clientKeyName: ''
+  }
+}
+
+// 读取本地证书文件内容（PEM 文本），随创建/更新请求写入数据库
+const readAsText = (file) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsText(file)
+  })
+
+const onCertChange = async (uploadFile, field, nameField) => {
+  if (!uploadFile?.raw) return
+  try {
+    form[field] = await readAsText(uploadFile.raw)
+    form[nameField] = uploadFile.raw.name
+  } catch (e) {
+    ElMessage.error('读取证书文件失败')
   }
 }
 
@@ -178,11 +246,16 @@ const handleSave = () => {
     if (!valid) return
     saving.value = true
     try {
+      const payload = { ...form }
       if (form.id) {
-        await updateCluster({ ...form })
+        // 未重新上传的证书字段不提交，避免覆盖库中已有证书
+        for (const k of ['caCert', 'clientCert', 'clientKey']) {
+          if (!payload[k]) delete payload[k]
+        }
+        await updateCluster(payload)
         ElMessage.success('集群已更新')
       } else {
-        await createCluster({ ...form })
+        await createCluster(payload)
         ElMessage.success('集群已创建')
       }
       dialogVisible.value = false
@@ -215,3 +288,30 @@ const handleDelete = (row) => {
 
 onMounted(loadClusters)
 </script>
+
+<style scoped>
+.cert-uploads {
+  width: 100%;
+}
+
+.cert-uploads .cert-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.cert-uploads .cert-label {
+  width: 84px;
+  color: #606266;
+  flex-shrink: 0;
+}
+
+.cert-uploads .cert-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.6;
+}
+
+</style>
