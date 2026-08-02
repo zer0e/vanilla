@@ -169,6 +169,8 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 请求体：`{clusterId*, page?, size?, search?}`，按栈名模糊搜索。
 
+> **可见范围**：全局管理员/集群管理员（`cluster_admin`）看到该集群**全部**栈；`cluster_user` 等普通成员只看到自己有栈角色绑定的栈。
+
 ---
 
 ## 3. 服务 Service `/service/api`

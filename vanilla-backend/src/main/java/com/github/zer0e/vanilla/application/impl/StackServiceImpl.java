@@ -160,9 +160,13 @@ public class StackServiceImpl implements StackService {
         Integer size = getStacksDto.getSize();
         Integer page = getStacksDto.getPage();
         String search = getStacksDto.getSearch();
-        User currentUser = SecurityUtil.getCurrentUser();
-        assert currentUser != null;
-        List<Integer> stackIds = userRoleMapper.selectHasPermissionStackIdsByUserId(currentUser.getId());
+        // 可见范围：集群管理员/全局管理员看该集群全部栈；普通成员只看自己有角色绑定的栈（null=不过滤）
+        List<Integer> stackIds = null;
+        if (!SecurityUtil.isGlobalAdmin() && !SecurityUtil.isClusterAdmin(clusterId)) {
+            User currentUser = SecurityUtil.getCurrentUser();
+            assert currentUser != null;
+            stackIds = userRoleMapper.selectHasPermissionStackIdsByUserId(currentUser.getId());
+        }
         PageHelper.startPage(page, size);
         List<StackDo> stackDos = stackMapper.selectStacksByClusterIdAndStackIds(clusterId, stackIds, search);
         List<StackVo> stackVos = stackDos.stream().map(StackConverter.INSTANCE::toVo).toList();

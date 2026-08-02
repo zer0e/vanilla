@@ -14,6 +14,7 @@ import com.github.zer0e.vanilla.application.dto.LoginDto;
 import com.github.zer0e.vanilla.application.dto.RoleBindingDto;
 import com.github.zer0e.vanilla.application.dto.UpdateUserDto;
 import com.github.zer0e.vanilla.application.vo.LoginVo;
+import com.github.zer0e.vanilla.application.vo.UserInfoVo;
 import com.github.zer0e.vanilla.application.vo.UserRoleBindingVo;
 import com.github.zer0e.vanilla.application.vo.UserVo;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -206,6 +207,21 @@ public class UserServiceImpl implements UserService, UserDetailsService {
                 .token(token)
                 .loginName(user.getLoginName())
                 .nikeName(user.getNikeName())
+                .build();
+    }
+
+    @Override
+    public UserInfoVo me() throws BusinessException {
+        User user = SecurityUtil.getCurrentUser();
+        if (user == null) {
+            throw new BusinessException("未登录");
+        }
+        boolean admin = user.getAuthorities() != null && user.getAuthorities().stream()
+                .anyMatch(p -> (Constants.ROLE_PREFIX + "admin").equals(p.getAuthority()));
+        return UserInfoVo.builder()
+                .loginName(user.getLoginName())
+                .nikeName(user.getNikeName())
+                .isAdmin(admin)
                 .build();
     }
 

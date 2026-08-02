@@ -16,7 +16,11 @@
         select * from t_stack t
         <where>
             <choose>
-                <when test="stackIds != null and stackIds.size > 0">
+                <!-- stackIds 为 null：不过滤（集群管理员/全局管理员看该集群全部栈） -->
+                <when test="stackIds == null">
+                    1 = 1
+                </when>
+                <when test="stackIds.size > 0">
                     t.id in
                     <foreach collection="stackIds" item="item" separator="," open="(" close=")">
                        #{item}
@@ -26,10 +30,14 @@
                     1 = 0
                 </otherwise>
             </choose>
+            <if test="search != null and search != ''">
+                AND t.stack_name like concat('%', #{search}, '%')
+            </if>
             <if test="clusterId != null">
                 AND t.cluster_id = #{clusterId}
             </if>
             AND t.status = 0
         </where>
+        order by t.id
     </select>
 </mapper>

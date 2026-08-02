@@ -8,7 +8,7 @@
     </div>
 
     <el-card v-loading="loading">
-      <el-table :data="clusters" stripe>
+      <el-table :data="clusters" stripe class="clusters-table" @row-click="goStacks">
         <el-table-column prop="id" label="ID" width="60" />
         <el-table-column prop="clusterName" label="集群名称" min-width="130" />
         <el-table-column label="类型" width="90" align="center">
@@ -40,7 +40,7 @@
         <el-table-column prop="createTime" label="创建时间" width="165" />
         <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" link @click="goStacks(row)">栈管理</el-button>
+            <el-button type="primary" link @click="goStacks(row)">进入集群</el-button>
             <el-button type="primary" link @click="openDialog(row)">编辑</el-button>
             <el-button type="danger" link @click="handleDelete(row)">删除</el-button>
           </template>
@@ -290,6 +290,10 @@ onMounted(loadClusters)
 </script>
 
 <style scoped>
+.clusters-table :deep(.el-table__row) {
+  cursor: pointer;
+}
+
 .cert-uploads {
   width: 100%;
 }
