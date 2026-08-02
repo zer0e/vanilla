@@ -22,6 +22,7 @@ import com.github.zer0e.vanilla.infrastructure.db.mapper.PortMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.StackMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.VolumeMapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.github.zer0e.vanilla.infrastructure.db.repository.PortDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.ServiceDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.StackDo;
@@ -117,10 +118,11 @@ public class SerServiceImpl implements SerService {
         if (!Objects.equals(deleteServiceDto.getStackId(), serviceDo.getStackId())) {
             throw new BusinessException(Constants.SERVICE_NOT_EXIST);
         }
-        serviceDo.setStatus(DataStatus.NOT_EXIST.ordinal());
-        serviceDo.setDeleteTime(LocalDateTime.now());
-        serviceDo.setDeleteUser(SecurityUtil.getCurrentUserName());
-        serviceMapper.updateById(serviceDo);
+        // 物理删除服务并清理其端口/卷：释放 uk_stack_service 唯一键，允许同名服务重新创建
+        // （软删除会在唯一索引上永久占名，导致删除后再添加同名服务报唯一键冲突）
+        portMapper.delete(new LambdaQueryWrapper<PortDo>().eq(PortDo::getServiceId, serviceDo.getId()));
+        volumeMapper.delete(new LambdaQueryWrapper<VolumeDo>().eq(VolumeDo::getServiceId, serviceDo.getId()));
+        serviceMapper.deleteById(serviceDo.getId());
         recordHistory(serviceDo.getStackId(), "删除服务 " + serviceDo.getServiceName());
     }
 

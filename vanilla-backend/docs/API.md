@@ -209,7 +209,7 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 ### 3.3 删除服务 `POST /v1/delete`
 
-**角色**：`ROLE_stack_{stackId}_stack_admin`。软删除。
+**角色**：`ROLE_stack_{stackId}_stack_admin`。**物理删除**：连同该服务的端口/卷一起删除，并**释放栈内服务名**（唯一键），允许同名服务重新创建。
 
 请求体：`{stackId*, serviceId*}`（注意是 `serviceId`）
 
