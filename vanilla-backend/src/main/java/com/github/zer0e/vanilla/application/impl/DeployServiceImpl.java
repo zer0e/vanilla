@@ -23,6 +23,7 @@ import com.github.zer0e.vanilla.application.dto.ContainerLogsDto;
 import com.github.zer0e.vanilla.application.dto.CreateHistoryDto;
 import com.github.zer0e.vanilla.application.dto.DeployStackDto;
 import com.github.zer0e.vanilla.application.vo.ContainerLogVo;
+import com.github.zer0e.vanilla.application.vo.DeployPreviewVo;
 import com.github.zer0e.vanilla.application.vo.ServiceStatusVo;
 import com.github.zer0e.vanilla.application.vo.StackStatusVo;
 import com.github.zer0e.vanilla.common.Constants;
@@ -225,6 +226,15 @@ public class DeployServiceImpl implements DeployService {
             return container.getId();
         }
         return stripSlash(container.getNames()[0]);
+    }
+
+    @Override
+    @PreAuthorize("hasAnyRole('stack_' + #deployStackDto.stackId + '_stack_admin')")
+    public DeployPreviewVo preview(DeployStackDto deployStackDto) throws BusinessException {
+        if (isKubernetes(deployStackDto.getStackId())) {
+            return kubernetesStackService.preview(deployStackDto);
+        }
+        return DeployPreviewVo.unsupported();
     }
 
     /**

@@ -10,6 +10,9 @@ export const deleteStack = (id) => request.post('/stack/api/v1/delete', { id })
 
 export const deployStack = (stackId) => request.post('/stack/api/v1/deploy', { stackId })
 
+// 部署预览：K8s 返回将创建的资源 YAML；Docker 返回 supported=false
+export const previewDeploy = (stackId) => request.post('/stack/api/v1/preview', { stackId })
+
 // status 支持 silent 选项，用于批量刷新状态时静默失败
 export const stackStatus = (stackId, options = {}) =>
   request.post('/stack/api/v1/status', { stackId }, options)

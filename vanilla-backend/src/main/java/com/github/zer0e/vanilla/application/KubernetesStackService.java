@@ -3,6 +3,7 @@ package com.github.zer0e.vanilla.application;
 import com.github.zer0e.vanilla.application.dto.ContainerLogsDto;
 import com.github.zer0e.vanilla.application.dto.DeployStackDto;
 import com.github.zer0e.vanilla.application.vo.ContainerLogVo;
+import com.github.zer0e.vanilla.application.vo.DeployPreviewVo;
 import com.github.zer0e.vanilla.application.vo.StackStatusVo;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
 
@@ -21,6 +22,11 @@ public interface KubernetesStackService {
     void removeStack(DeployStackDto deployStackDto) throws BusinessException;
 
     ContainerLogVo getContainerLog(ContainerLogsDto containerLogsDto) throws BusinessException;
+
+    /**
+     * 预览部署将生成的 K8s 资源 YAML（仅 K8s 集群支持）
+     */
+    DeployPreviewVo preview(DeployStackDto deployStackDto) throws BusinessException;
 
     boolean isKubernetes(Integer stackId) throws BusinessException;
 }

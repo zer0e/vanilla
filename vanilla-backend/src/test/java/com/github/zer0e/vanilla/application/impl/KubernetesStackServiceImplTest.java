@@ -4,8 +4,10 @@ import com.github.zer0e.vanilla.application.HistoryService;
 import com.github.zer0e.vanilla.application.dto.ContainerLogsDto;
 import com.github.zer0e.vanilla.application.dto.DeployStackDto;
 import com.github.zer0e.vanilla.application.vo.ContainerLogVo;
+import com.github.zer0e.vanilla.application.vo.DeployPreviewVo;
 import com.github.zer0e.vanilla.application.vo.StackStatusVo;
 import com.github.zer0e.vanilla.common.Constants;
+import com.github.zer0e.vanilla.domain.ContainerPort;
 import com.github.zer0e.vanilla.domain.DataStatus;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.ClusterMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.PortMapper;
@@ -108,6 +110,39 @@ class KubernetesStackServiceImplTest {
         when(clusterMapper.selectById(1)).thenReturn(ClusterDo.builder().id(1).type("DOCKER").build());
 
         assertThat(kubeStackService.isKubernetes(1)).isFalse();
+    }
+
+    @Test
+    void preview_generatesYamlForK8sStack() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(ServiceDo.builder().id(1).stackId(1).serviceName("nginx")
+                        .replicas(1).image("nginx:latest")
+                        .containerPorts(List.of(new ContainerPort("tcp", 80))).build()));
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
+        when(volumeMapper.selectVolumesByServiceIds(java.util.List.of(1))).thenReturn(Collections.emptyList());
+
+        DeployPreviewVo vo = kubeStackService.preview(new DeployStackDto(1));
+
+        assertThat(vo.getSupported()).isTrue();
+        // fabric8 asYaml 输出值带引号，且每个文档自带 --- 分隔
+        assertThat(vo.getYaml())
+                .contains("Namespace")
+                .contains("Deployment")
+                .contains("kind: \"Deployment\"")
+                .contains("nginx")
+                .contains("nginx-80")
+                .contains("Service");
+    }
+
+    @Test
+    void preview_dockerStack_returnsUnsupported() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(ClusterDo.builder().id(1).type("DOCKER")
+                .status(DataStatus.EXIST.ordinal()).build());
+
+        assertThat(kubeStackService.preview(new DeployStackDto(1)).getSupported()).isFalse();
     }
 
     // ---- 部署：Deployment / Service / PVC 资源映射 ----

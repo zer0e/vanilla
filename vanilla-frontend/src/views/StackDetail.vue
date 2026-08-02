@@ -8,7 +8,7 @@
         <h2>栈：{{ stackName }} 详情</h2>
       </div>
       <div class="header-right">
-        <el-button type="success" :loading="deploying" @click="handleDeploy">
+        <el-button type="success" :loading="deploying" @click="openDeployDialog">
           <el-icon><Upload /></el-icon>&nbsp;部署
         </el-button>
         <el-button type="warning" :loading="stopping" @click="handleStop">
@@ -518,6 +518,30 @@
         <pre class="log-body" v-loading="logLoading">{{ logContent }}</pre>
       </template>
     </el-dialog>
+
+    <!-- 部署预览对话框 -->
+    <el-dialog
+      v-model="deployDialogVisible"
+      title="部署预览"
+      width="860px"
+      destroy-on-close
+    >
+      <el-row class="preview-head" :gutter="12">
+        <el-col :span="16">
+          <span v-if="previewSupported" class="text-muted">即将在命名空间部署以下 K8s 资源，确认后开始：</span>
+          <el-alert v-else-if="!previewLoading" title="Docker 集群无 YAML 预览，确认后将直接部署" type="info" :closable="false" show-icon />
+        </el-col>
+        <el-col :span="8" class="preview-head-right">
+          <el-button @click="openDeployDialog" :disabled="previewLoading">重新预览</el-button>
+        </el-col>
+      </el-row>
+      <pre v-if="previewSupported" class="preview-yaml" v-loading="previewLoading">{{ previewYaml }}</pre>
+      <div v-else-if="previewLoading" v-loading="true" class="preview-loading"></div>
+      <template #footer>
+        <el-button @click="deployDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="deploying" @click="confirmDeploy">确认部署</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -539,7 +563,8 @@ import {
   deployStack,
   stopStack,
   removeStack,
-  getContainerLog
+  getContainerLog,
+  previewDeploy
 } from '@/api/stack'
 import { statusMeta } from '@/utils/constants'
 
@@ -577,27 +602,41 @@ const deploying = ref(false)
 const stopping = ref(false)
 const removing = ref(false)
 
-const handleDeploy = () => {
-  ElMessageBox.confirm(
-    `确定部署栈「${stackName.value}」吗？将拉取镜像并按策略创建/替换容器。`,
-    '部署确认',
-    { confirmButtonText: '部署', cancelButtonText: '取消' }
-  )
-    .then(async () => {
-      deploying.value = true
-      try {
-        const res = await deployStack(stackId)
-        if (res?.status) {
-          stackStatusName.value = res.status
-        }
-        ElMessage.success(`部署成功，当前状态：${statusMeta(res?.status).label}`)
-      } catch (e) {
-        // 拦截器已提示（如端口冲突）
-      } finally {
-        deploying.value = false
-      }
-    })
-    .catch(() => {})
+const deployDialogVisible = ref(false)
+const previewLoading = ref(false)
+const previewSupported = ref(false)
+const previewYaml = ref('')
+
+const openDeployDialog = async () => {
+  deployDialogVisible.value = true
+  previewLoading.value = true
+  previewSupported.value = false
+  previewYaml.value = ''
+  try {
+    const preview = await previewDeploy(stackId)
+    previewSupported.value = !!preview?.supported
+    previewYaml.value = preview?.yaml || ''
+  } catch (e) {
+    // 拦截器已提示
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+const confirmDeploy = async () => {
+  deploying.value = true
+  try {
+    const res = await deployStack(stackId)
+    if (res?.status) {
+      stackStatusName.value = res.status
+    }
+    ElMessage.success(`部署成功，当前状态：${statusMeta(res?.status).label}`)
+    deployDialogVisible.value = false
+  } catch (e) {
+    // 拦截器已提示（如端口冲突）
+  } finally {
+    deploying.value = false
+  }
 }
 
 const handleStop = () => {
@@ -1228,6 +1267,34 @@ onMounted(() => {
 
 .log-alert {
   margin-bottom: 10px;
+}
+
+.preview-yaml {
+  min-height: 300px;
+  max-height: 480px;
+  overflow: auto;
+  margin: 12px 0 0;
+  padding: 12px;
+  background-color: #0d1117;
+  color: #c9d1d9;
+  border-radius: 4px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.preview-head {
+  margin-bottom: 4px;
+}
+
+.preview-head-right {
+  text-align: right;
+}
+
+.preview-loading {
+  height: 200px;
 }
 
 .log-body {

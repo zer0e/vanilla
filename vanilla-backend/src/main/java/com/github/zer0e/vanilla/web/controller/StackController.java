@@ -8,6 +8,7 @@ import com.github.zer0e.vanilla.application.dto.DeployStackDto;
 import com.github.zer0e.vanilla.application.dto.GetStacksDto;
 import com.github.zer0e.vanilla.application.dto.UpdateStackDto;
 import com.github.zer0e.vanilla.application.vo.ContainerLogVo;
+import com.github.zer0e.vanilla.application.vo.DeployPreviewVo;
 import com.github.zer0e.vanilla.application.vo.StackStatusVo;
 import com.github.zer0e.vanilla.application.vo.StackVo;
 import com.github.zer0e.vanilla.common.PageData;
@@ -86,5 +87,11 @@ public class StackController {
     @Operation(summary = "查看服务容器日志")
     public RestResponse<ContainerLogVo> getContainerLog(@RequestBody @Valid ContainerLogsDto containerLogsDto) throws BusinessException {
         return RestResponse.ok(deployService.getContainerLog(containerLogsDto));
+    }
+
+    @PostMapping("/v1/preview")
+    @Operation(summary = "预览部署资源 YAML（仅 K8s 集群）")
+    public RestResponse<DeployPreviewVo> preview(@RequestBody @Valid DeployStackDto deployStackDto) throws BusinessException {
+        return RestResponse.ok(deployService.preview(deployStackDto));
     }
 }
