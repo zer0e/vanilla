@@ -2,10 +2,12 @@ package com.github.zer0e.vanilla.web.controller;
 
 import com.github.zer0e.vanilla.application.DeployService;
 import com.github.zer0e.vanilla.application.StackService;
+import com.github.zer0e.vanilla.application.dto.ContainerLogsDto;
 import com.github.zer0e.vanilla.application.dto.CreateStackDto;
 import com.github.zer0e.vanilla.application.dto.DeployStackDto;
 import com.github.zer0e.vanilla.application.dto.GetStacksDto;
 import com.github.zer0e.vanilla.application.dto.UpdateStackDto;
+import com.github.zer0e.vanilla.application.vo.ContainerLogVo;
 import com.github.zer0e.vanilla.application.vo.StackStatusVo;
 import com.github.zer0e.vanilla.application.vo.StackVo;
 import com.github.zer0e.vanilla.common.PageData;
@@ -78,5 +80,11 @@ public class StackController {
     public RestResponse<Void> removeStack(@RequestBody @Valid DeployStackDto deployStackDto) throws BusinessException {
         deployService.removeStack(deployStackDto);
         return RestResponse.ok(null);
+    }
+
+    @PostMapping("/v1/logs")
+    @Operation(summary = "查看服务容器日志")
+    public RestResponse<ContainerLogVo> getContainerLog(@RequestBody @Valid ContainerLogsDto containerLogsDto) throws BusinessException {
+        return RestResponse.ok(deployService.getContainerLog(containerLogsDto));
     }
 }

@@ -3,10 +3,17 @@ package com.github.zer0e.vanilla.application.impl;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.command.HealthState;
+import com.github.dockerjava.api.command.InspectContainerCmd;
+import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.github.dockerjava.api.command.InspectContainerResponse.ContainerState;
 import com.github.dockerjava.api.command.ListContainersCmd;
+import com.github.dockerjava.api.command.LogContainerCmd;
 import com.github.dockerjava.api.command.PullImageCmd;
 import com.github.dockerjava.api.command.RemoveContainerCmd;
 import com.github.dockerjava.api.command.StartContainerCmd;
+import com.github.dockerjava.api.model.HealthCheck;
+import com.github.dockerjava.core.command.LogContainerResultCallback;
 import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.ExposedPort;
@@ -14,10 +21,16 @@ import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.Ports;
 import com.github.dockerjava.api.model.Volume;
 import com.github.zer0e.vanilla.application.HistoryService;
+import com.github.zer0e.vanilla.application.KubernetesStackService;
+import com.github.zer0e.vanilla.application.dto.ContainerLogsDto;
 import com.github.zer0e.vanilla.application.dto.DeployStackDto;
+import com.github.zer0e.vanilla.application.vo.ContainerLogVo;
 import com.github.zer0e.vanilla.application.vo.ServiceStatusVo;
+import com.github.zer0e.vanilla.application.vo.StackStatusVo;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
 import com.github.zer0e.vanilla.domain.DataStatus;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.ClusterMapper;
+import com.github.zer0e.vanilla.infrastructure.db.repository.ClusterDo;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.PortMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.StackMapper;
@@ -42,6 +55,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -65,6 +79,10 @@ class DeployServiceImplTest {
     @Mock
     private StackMapper stackMapper;
     @Mock
+    private ClusterMapper clusterMapper;
+    @Mock
+    private KubernetesStackService kubernetesStackService;
+    @Mock
     private ServiceMapper serviceMapper;
     @Mock
     private PortMapper portMapper;
@@ -80,7 +98,8 @@ class DeployServiceImplTest {
     @BeforeEach
     void setUp() {
         deployService = new DeployServiceImpl(
-                dockerClientFactory, stackMapper, serviceMapper, portMapper, volumeMapper, historyService);
+                dockerClientFactory, stackMapper, clusterMapper, serviceMapper, portMapper,
+                volumeMapper, historyService, kubernetesStackService);
     }
 
     // ---- buildHostConfig：端口绑定必须存在于 HostConfig（修复被 withHostConfig 覆盖的缺陷） ----
@@ -304,7 +323,161 @@ class DeployServiceImplTest {
         verify(dockerClient).createContainerCmd("nginx:latest");
     }
 
+    // ---- 健康检查：Docker HEALTHCHECK 构建与健康统计 ----
+
+    @Test
+    void buildHealthCheck_configured_buildsCmdShellProbe() {
+        ServiceDo service = ServiceDo.builder().healthCheckCmd("curl -f http://localhost/health || exit 1").build();
+
+        HealthCheck hc = deployService.buildHealthCheck(service);
+
+        assertThat(hc).isNotNull();
+        assertThat(hc.getTest()).containsExactly("CMD-SHELL", "curl -f http://localhost/health || exit 1");
+        assertThat(hc.getInterval()).isEqualTo(java.time.Duration.ofSeconds(30).toNanos());
+        assertThat(hc.getTimeout()).isEqualTo(java.time.Duration.ofSeconds(10).toNanos());
+        assertThat(hc.getRetries()).isEqualTo(3);
+        assertThat(hc.getStartPeriod()).isEqualTo(java.time.Duration.ofSeconds(5).toNanos());
+    }
+
+    @Test
+    void buildHealthCheck_notConfigured_returnsNull() {
+        assertThat(deployService.buildHealthCheck(ServiceDo.builder().build())).isNull();
+    }
+
+    @Test
+    void countHealthy_countsOnlyHealthyRunningContainers() {
+        InspectContainerResponse healthyResp = inspectResponse("healthy");
+        InspectContainerResponse unhealthyResp = inspectResponse("unhealthy");
+        InspectContainerCmd inspect0 = mock(InspectContainerCmd.class);
+        when(dockerClient.inspectContainerCmd("c0")).thenReturn(inspect0);
+        when(inspect0.exec()).thenReturn(healthyResp);
+        InspectContainerCmd inspect1 = mock(InspectContainerCmd.class);
+        when(dockerClient.inspectContainerCmd("c1")).thenReturn(inspect1);
+        when(inspect1.exec()).thenReturn(unhealthyResp);
+
+        Container runningHealthy = container("c0");
+        when(runningHealthy.getState()).thenReturn("running");
+        Container runningUnhealthy = container("c1");
+        when(runningUnhealthy.getState()).thenReturn("running");
+        Container stopped = container("c2");
+        when(stopped.getState()).thenReturn("exited");
+
+        // c0 运行且 healthy → 计健康；c1 运行但 unhealthy → 不计；c2 停止 → 不 inspect
+        assertThat(deployService.countHealthy(dockerClient, List.of(runningHealthy, runningUnhealthy, stopped)))
+                .isEqualTo(1);
+        verify(dockerClient, never()).inspectContainerCmd("c2");
+    }
+
+    @Test
+    void countHealthy_noHealthInfo_treatsRunningAsHealthy() {
+        // 未配置健康检查 / 尚未产生健康状态时，运行即视为健康，且不因异常中断
+        InspectContainerResponse resp = inspectResponse(null);
+        InspectContainerCmd inspect = mock(InspectContainerCmd.class);
+        when(dockerClient.inspectContainerCmd("c0")).thenReturn(inspect);
+        when(inspect.exec()).thenReturn(resp);
+
+        Container running = container("c0");
+        when(running.getState()).thenReturn("running");
+
+        assertThat(deployService.countHealthy(dockerClient, List.of(running))).isEqualTo(1);
+    }
+
+    private InspectContainerResponse inspectResponse(String healthStatus) {
+        ContainerState state = mock(ContainerState.class);
+        if (healthStatus == null) {
+            when(state.getHealth()).thenReturn(null);
+        } else {
+            HealthState health = mock(HealthState.class);
+            when(health.getStatus()).thenReturn(healthStatus);
+            when(state.getHealth()).thenReturn(health);
+        }
+        InspectContainerResponse resp = mock(InspectContainerResponse.class);
+        when(resp.getState()).thenReturn(state);
+        return resp;
+    }
+
+    // ---- 运行时分流：K8S 集群委托 KubernetesStackService ----
+
+    @Test
+    void deployStack_k8sCluster_delegatesToKubernetesStackService() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(ClusterDo.builder().id(1).type("K8S").build());
+        StackStatusVo vo = mock(StackStatusVo.class);
+        when(kubernetesStackService.deployStack(new DeployStackDto(1))).thenReturn(vo);
+
+        StackStatusVo result = deployService.deployStack(new DeployStackDto(1));
+
+        assertThat(result).isSameAs(vo);
+        verify(kubernetesStackService).deployStack(new DeployStackDto(1));
+        // K8S 集群不触碰 Docker 连接
+        verify(dockerClientFactory, never()).getClient(anyInt());
+    }
+
+    // ---- 容器日志：按副本索引选容器、默认取运行副本、未部署报错 ----
+
+    @Test
+    void getContainerLog_returnsLogOfRequestedReplica() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(dockerClientFactory.getClient(1)).thenReturn(dockerClient);
+        stubLogFetch("c1", "GET / HTTP/1.1\" 200");
+        stubListContainers(List.of(
+                container("c0", "/vanilla-1-nginx-0"),
+                container("c1", "/vanilla-1-nginx-1")));
+
+        ContainerLogVo vo = deployService.getContainerLog(new ContainerLogsDto(1, 1, 1, 100));
+
+        assertThat(vo.getContainerId()).isEqualTo("c1");
+        assertThat(vo.getContainerName()).isEqualTo("vanilla-1-nginx-1");
+        assertThat(vo.getLog()).isEqualTo("GET / HTTP/1.1\" 200");
+        verify(dockerClient).logContainerCmd("c1");
+    }
+
+    @Test
+    void getContainerLog_noReplicaIndex_prefersRunningContainer() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(dockerClientFactory.getClient(1)).thenReturn(dockerClient);
+        stubLogFetch("c1", "log of running replica");
+        // c0 停止，c1 运行 → 默认查看运行中的副本
+        Container c0 = container("c0", "/vanilla-1-nginx-0");
+        when(c0.getState()).thenReturn("exited");
+        Container c1 = container("c1", "/vanilla-1-nginx-1");
+        when(c1.getState()).thenReturn("running");
+        stubListContainers(List.of(c0, c1));
+
+        ContainerLogVo vo = deployService.getContainerLog(new ContainerLogsDto(1, 1, null, 100));
+
+        assertThat(vo.getContainerId()).isEqualTo("c1");
+        verify(dockerClient).logContainerCmd("c1");
+    }
+
+    @Test
+    void getContainerLog_serviceNotDeployed_throws() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(dockerClientFactory.getClient(1)).thenReturn(dockerClient);
+        stubListContainers(Collections.emptyList());
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> deployService.getContainerLog(new ContainerLogsDto(1, 1, null, 100)));
+
+        assertThat(ex.getMessage()).contains("未部署");
+        verify(dockerClient, never()).logContainerCmd(anyString());
+    }
+
     // ---- helpers ----
+
+    /**
+     * stub docker 日志读取链路：logContainerCmd → LogContainerResultCallback.toString()
+     */
+    private void stubLogFetch(String containerId, String logText) throws Exception {
+        LogContainerCmd logCmd = mock(LogContainerCmd.class);
+        when(dockerClient.logContainerCmd(containerId)).thenReturn(logCmd);
+        when(logCmd.withStdOut(true)).thenReturn(logCmd);
+        when(logCmd.withStdErr(true)).thenReturn(logCmd);
+        when(logCmd.withTail(anyInt())).thenReturn(logCmd);
+        LogContainerResultCallback callback = mock(LogContainerResultCallback.class);
+        when(logCmd.exec(org.mockito.ArgumentMatchers.any(LogContainerResultCallback.class))).thenReturn(callback);
+        when(callback.toString()).thenReturn(logText);
+    }
 
     @SafeVarargs
     private final void stubListContainers(List<Container>... responses) {
@@ -331,7 +504,7 @@ class DeployServiceImplTest {
 
     private Container container(String id) {
         Container c = mock(Container.class);
-        when(c.getId()).thenReturn(id);
+        lenient().when(c.getId()).thenReturn(id);
         return c;
     }
 

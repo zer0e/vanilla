@@ -72,7 +72,7 @@ role=true 时前缀 ROLE_：
 
 方法级 `@PreAuthorize("hasAnyRole('stack_' + #dto.stackId + '_stack_admin')")` 基于 SpEL 取参数中的资源 id 动态拼接角色名进行校验。
 
-> **注意**：角色授权信息缓存在 Redis，创建集群/栈授予新角色后，需要清除 `USER_INFO_<username>` 缓存才能生效（`@PreAuthorize` 读取的是 SecurityContext 中缓存的 authorities）。
+> **注意**：角色授权信息缓存在 Redis。创建集群/栈授予新角色、用户管理页变更角色时，系统会自动失效相关用户缓存，新角色立即生效（`@PreAuthorize` 读取的是 SecurityContext 中缓存失效后重建的 authorities）。
 
 ### 权限矩阵
 
@@ -126,6 +126,25 @@ deployStack(stackId)
 - 端口映射与资源限制写入**同一个 HostConfig**，避免 `withHostConfig` 覆盖端口绑定
 
 **状态统计**：按 `com.vanilla.stack_id` 标签过滤容器 → 按 `com.vanilla.service_id` 分组 → 统计 `running` 数量 → 映射为 `RUNNING/STOPPED/PARTIAL/NONE`。
+健康统计数据（`healthyCount`）：配置了 `healthCheckCmd` 的服务逐个 `inspectContainerCmd` 读取 HEALTHCHECK 状态。
+
+---
+
+## 运行时分流（Docker / K8s）
+
+`DeployServiceImpl` 是统一的部署入口：每个操作先按栈的集群类型分流——`K8S` 委托 `KubernetesStackServiceImpl`，其余走 Docker 链路（保持既有方法与单测不变）。两套运行时共用 `RuntimeStateResolver`（状态映射）与同一套 RBAC `@PreAuthorize`。
+
+K8s 链路（`KubernetesClientFactory` 按 clusterId 缓存 `KubernetesClient`）：
+
+```
+栈(kubernetes) → vanilla 命名空间
+  ├─ 服务 → Deployment（标签 com.vanilla.stack_id / service_id 分组）
+  ├─ 端口 → Service（ClusterIP；声明端口 ≤ 2767 附加 NodePort 30000+端口）
+  ├─ 卷   → PVC（ReadWriteOnce；下架保留）
+  ├─ 健康 → readiness + liveness exec 探针（同 Docker HEALTHCHECK 参数）
+  ├─ 停止 → scale=0；下架 → 删 Deployment+Service；日志 → Pod getLog() 截尾
+  └─ 状态 → readyReplicas → RUNNING/PARTIAL/STOPPED/NONE（缩放为 0 记 STOPPED）
+```
 
 ---
 

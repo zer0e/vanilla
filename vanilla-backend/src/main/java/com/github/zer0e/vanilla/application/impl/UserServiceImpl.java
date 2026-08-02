@@ -239,7 +239,7 @@ public class UserServiceImpl implements UserService, UserDetailsService {
         if (updateUserDto.getRoles() != null) {
             replaceRoles(userDo, updateUserDto.getRoles());
         }
-        invalidateUserCache(userDo.getLoginName());
+        evictUserCache(userDo.getLoginName());
         return toUserVo(userDo);
     }
 
@@ -254,7 +254,7 @@ public class UserServiceImpl implements UserService, UserDetailsService {
         userDo.setStatus(1);
         userMapper.updateById(userDo);
         userRoleMapper.delete(new LambdaQueryWrapper<UserRoleDo>().eq(UserRoleDo::getUserId, userDo.getId()));
-        invalidateUserCache(userDo.getLoginName());
+        evictUserCache(userDo.getLoginName());
     }
 
     private UserVo toUserVo(UserDo userDo) {
@@ -315,7 +315,8 @@ public class UserServiceImpl implements UserService, UserDetailsService {
         }
     }
 
-    private void invalidateUserCache(String loginName) {
+    @Override
+    public void evictUserCache(String loginName) {
         try {
             redisTemplate.delete(Constants.USER_CACHE_PREFIX + loginName);
         } catch (Exception e) {

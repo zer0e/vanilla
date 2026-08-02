@@ -10,6 +10,7 @@ import com.github.zer0e.vanilla.common.Constants;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
 import com.github.zer0e.vanilla.domain.ClusterType;
 import com.github.zer0e.vanilla.domain.DataStatus;
+import com.github.zer0e.vanilla.infrastructure.cert.ClusterCertMaterializer;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.ClusterMapper;
 import com.github.zer0e.vanilla.infrastructure.db.repository.ClusterDo;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class DockerClientFactory {
 
     private final ClusterMapper clusterMapper;
+    private final ClusterCertMaterializer certMaterializer;
 
     private final ConcurrentHashMap<Integer, DockerClient> clients = new ConcurrentHashMap<>();
 
@@ -80,8 +82,10 @@ public class DockerClientFactory {
         DefaultDockerClientConfig.Builder builder = DefaultDockerClientConfig.createDefaultConfigBuilder()
                 .withDockerHost(cluster.getEndpoint())
                 .withDockerTlsVerify(Boolean.TRUE.equals(cluster.getTlsVerify()));
-        if (StringUtils.hasText(cluster.getDockerCertPath())) {
-            builder.withDockerCertPath(cluster.getDockerCertPath());
+        // 优先用数据库里用户上传的证书（materialize 落盘为 ca.pem/cert.pem/key.pem），否则回退 dockerCertPath
+        String certDir = certMaterializer.materialize(cluster);
+        if (certDir != null) {
+            builder.withDockerCertPath(certDir);
         }
         DockerClientConfig config = builder.build();
         DockerHttpClient httpClient = new ApacheDockerHttpClient.Builder()

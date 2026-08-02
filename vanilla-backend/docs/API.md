@@ -24,7 +24,7 @@ x-auth-user: admin
 {"success":false,"code":403,"msg":"No Permission"}
 ```
 
-> 用户信息会缓存在 Redis（`USER_INFO_<用户名>`，24h）。创建集群/栈后角色会变化，需清除缓存才能生效新角色。
+> 用户信息会缓存在 Redis（`USER_INFO_<用户名>`，24h）。创建集群/栈、用户管理页变更角色后系统会自动失效对应缓存，新角色即时生效。
 
 ### 统一响应结构
 
@@ -79,10 +79,15 @@ x-auth-user: admin
 | clusterName | string | ✅ | 集群名称 |
 | description | string | | 描述 |
 | type | string | | 集群类型 `DOCKER`（默认）/ `K8S` |
-| endpoint | string | | Docker daemon 地址，如 `unix:///var/run/docker.sock`、`tcp://192.168.1.100:2375` |
+| endpoint | string | | Docker daemon / K8s API Server 地址，如 `unix:///var/run/docker.sock`、`https://127.0.0.1:6443` |
 | tlsVerify | boolean | | 是否启用 TLS（默认 false） |
-| dockerCertPath | string | | TLS 证书目录 |
+| dockerCertPath | string | | TLS 证书目录（服务器已有证书的场景，与下方上传三选一） |
+| caCert | string | | CA 证书（PEM 文本，用户上传，**存库**） |
+| clientCert | string | | 客户端证书（PEM 文本，存库） |
+| clientKey | string | | 客户端私钥（PEM 文本，存库） |
 | userIds | int[] | | 集群普通成员用户 id |
+
+> TLS 证书优先使用数据库中的 `caCert/clientCert/clientKey`（前端上传），后端连接时自动落盘为临时文件，同时兼容 K8s 与 Docker 命名；列表/详情接口**不会返回**证书明文。
 
 **请求**
 
@@ -319,7 +324,9 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 
 请求体：`{stackId*}`
 
-流程：**宿主端口全局预校验** → 逐服务「拉镜像 → 按更新策略创建/替换容器」→ 清理孤儿容器。失败自动回滚清理。
+流程：**宿主端口全局预校验（Docker）** → 逐服务「拉镜像 → 按更新策略创建/替换容器（Docker）或 Deployment/Service/PVC（K8s）」→ 清理孤儿资源。失败自动回滚清理。
+
+> **健康检查**：服务可配置 `healthCheckCmd`（如 `curl -f http://localhost:8080/health || exit 1`）。Docker 侧容器挂载 HEALTHCHECK（间隔 30s / 超时 10s / 重试 3 / 启动宽限 5s），K8s 侧生成 readiness + liveness exec 探针；状态接口返回 `healthyCount`。
 
 **更新策略**（`service.strategy`）：
 
@@ -337,11 +344,13 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
   "stackId": 1,
   "status": "RUNNING",
   "services": [
-    {"serviceId": 1, "serviceName": "nginx", "status": "RUNNING", "runningCount": 2, "replicas": 2},
-    {"serviceId": 2, "serviceName": "static", "status": "RUNNING", "runningCount": 1, "replicas": 1}
+    {"serviceId": 1, "serviceName": "nginx", "status": "RUNNING", "runningCount": 2, "healthyCount": 2, "replicas": 2},
+    {"serviceId": 2, "serviceName": "static", "status": "RUNNING", "runningCount": 1, "healthyCount": 1, "replicas": 1}
   ]
 }
 ```
+
+> `healthyCount`：服务配置了 `healthCheckCmd`（健康检查命令）时按容器健康状态统计——Docker 读取容器 HEALTHCHECK 状态、K8s 按 readyReplicas；未配置时等于 `runningCount`。
 
 **容器命名**：`vanilla-{stackId}-{serviceName}`（单副本）/ `vanilla-{stackId}-{serviceName}-{index}`（多副本）。
 
@@ -371,6 +380,31 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
 ### 8.4 下架栈 `POST /stack/api/v1/remove`
 
 **角色**：`stack_admin`。删除栈下所有容器（含停止的）。
+
+### 8.5 查看容器日志 `POST /stack/api/v1/logs`
+
+**角色**：`stack_admin` / `member` / `readonly`
+
+请求体：
+
+```json
+{"stackId": 1, "serviceId": 1, "replicaIndex": 1, "tail": 500}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `stackId`* | 栈 id |
+| `serviceId`* | 服务 id |
+| `replicaIndex` | 副本索引；缺省时单副本取唯一容器，多副本优先取**运行中的**副本 |
+| `tail` | 日志行数，默认 500，范围 1~10000 |
+
+**响应**（`ContainerLogVo`，日志为 stdout + stderr 合并文本）：
+
+```json
+{"containerId": "abc123", "containerName": "vanilla-1-nginx-1", "log": "GET / HTTP/1.1\" 200 ..."}
+```
+
+服务未部署（无容器）返回 `服务未部署，无可查看日志的容器`。
 
 ---
 

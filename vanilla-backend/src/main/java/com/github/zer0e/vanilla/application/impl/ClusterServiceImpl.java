@@ -17,6 +17,7 @@ import com.github.zer0e.vanilla.infrastructure.db.mapper.ClusterMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.UserRoleMapper;
 import com.github.zer0e.vanilla.infrastructure.db.repository.ClusterDo;
 import com.github.zer0e.vanilla.infrastructure.docker.DockerClientFactory;
+import com.github.zer0e.vanilla.infrastructure.kubernetes.KubernetesClientFactory;
 import com.github.zer0e.vanilla.infrastructure.db.repository.RoleDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.UserRoleDo;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +45,7 @@ public class ClusterServiceImpl implements ClusterService {
     private final UserService userService;
     private final RedissonClient redissonClient;
     private final DockerClientFactory dockerClientFactory;
+    private final KubernetesClientFactory kubernetesClientFactory;
 
     @Override
     @PreAuthorize("hasRole('admin')")
@@ -94,6 +96,8 @@ public class ClusterServiceImpl implements ClusterService {
         }
         userRoleMapper.insert(users);
 
+        // 新授予的 cluster_admin / cluster_user 立即生效，避免依赖 Redis 24h 权限缓存的延迟
+        userService.evictUserCache(currentUser.getLoginName());
         return ClusterConverter.INSTANCE.toVo(clusterDo);
     }
 
@@ -111,8 +115,9 @@ public class ClusterServiceImpl implements ClusterService {
         clusterDo.setModifyTime(LocalDateTime.now());
         clusterDo.setModifyUser(currentUser.getLoginName());
         clusterMapper.updateById(clusterDo);
-        // 连接信息可能变化，失效缓存的 DockerClient，下次部署重建连接
+        // 连接信息可能变化，失效缓存的 Docker/K8s 客户端，下次部署重建连接
         dockerClientFactory.invalidate(updateClusterDto.getId());
+        kubernetesClientFactory.invalidate(updateClusterDto.getId());
 
         List<Integer> userIds = updateClusterDto.getUserIds();
         RLock lock = redissonClient.getLock(Constants.LOCK_PREFIX + "cluster-" + updateClusterDto.getId());
@@ -140,6 +145,7 @@ public class ClusterServiceImpl implements ClusterService {
         clusterMapper.updateById(clusterDo);
         // 集群已删除，关闭并移除缓存的连接
         dockerClientFactory.invalidate(id);
+        kubernetesClientFactory.invalidate(id);
     }
 
     @Override

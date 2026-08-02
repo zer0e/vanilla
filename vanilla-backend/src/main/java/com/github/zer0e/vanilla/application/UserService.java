@@ -25,4 +25,9 @@ public interface UserService {
     UserVo updateUser(UpdateUserDto updateUserDto) throws BusinessException;
 
     void deleteUser(DeleteUserDto deleteUserDto) throws BusinessException;
+
+    /**
+     * 使指定用户的 Redis 权限缓存立即失效（新授予角色后调用，避免最长 24h 延迟生效）
+     */
+    void evictUserCache(String loginName);
 }

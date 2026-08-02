@@ -17,5 +17,10 @@ public class ServiceStatusVo {
 
     private Integer runningCount;
 
+    /**
+     * 健康数（配置了 healthCheckCmd 时按容器健康状态统计，否则等于 runningCount）
+     */
+    private Integer healthyCount;
+
     private Integer replicas;
 }

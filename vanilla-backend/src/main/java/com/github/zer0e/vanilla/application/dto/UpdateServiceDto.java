@@ -44,6 +44,11 @@ public class UpdateServiceDto {
     private String terminationGracePeriodSeconds;
 
     /**
+     * 健康检查命令（Docker HEALTHCHECK）
+     */
+    private String healthCheckCmd;
+
+    /**
      * 更新策略 PollingUpdate
      */
     private String strategy;

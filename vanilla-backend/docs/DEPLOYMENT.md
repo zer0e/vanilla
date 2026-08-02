@@ -59,6 +59,14 @@ mysql -uroot -proot < src/main/resources/sql/vanilla.sql
 
 > 表结构含软删除审计字段与唯一约束（如 `t_stack.uk_cluster_stack` 永久占用栈名），已与 DO 实体对齐。
 
+> **已有库升级**：本版本 `t_service` 新增 `health_check_cmd` 列（健康检查命令）、`t_cluster` 新增证书存库三列，存量库需执行：
+> ```sql
+> ALTER TABLE vanilla.t_service ADD COLUMN health_check_cmd varchar(255) NULL COMMENT '健康检查命令，如 curl -f http://localhost/health || exit 1' AFTER termination_grace_period_seconds;
+> ALTER TABLE vanilla.t_cluster ADD COLUMN ca_cert longtext NULL COMMENT 'CA 证书（PEM，上传存库）',
+>   ADD COLUMN client_cert longtext NULL COMMENT '客户端证书（PEM）',
+>   ADD COLUMN client_key longtext NULL COMMENT '客户端私钥（PEM）';
+> ```
+
 ## 5. 配置
 
 默认激活 `dev` profile，连接本机 MySQL/Redis：
@@ -127,8 +135,7 @@ curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
   -H "Content-Type: application/json" -H "x-auth-user: admin" \
   -d '{"clusterName":"docker-test","type":"DOCKER","endpoint":"unix:///var/run/docker.sock","tlsVerify":false}'
 
-# 关键：刷新用户缓存，使新授予的 cluster_admin 生效
-docker exec vanilla-redis redis-cli DEL USER_INFO_admin
+# 创建集群自动授予 cluster_admin 并即时失效缓存，无需手动操作
 ```
 
 ### 8.2 创建栈 / 服务 / 端口
@@ -137,7 +144,7 @@ docker exec vanilla-redis redis-cli DEL USER_INFO_admin
 curl -X POST http://localhost:8080/vanilla/stack/api/v1/create \
   -H "Content-Type: application/json" -H "x-auth-user: admin" \
   -d '{"clusterId":1,"stackName":"web"}'
-docker exec vanilla-redis redis-cli DEL USER_INFO_admin   # 获取 stack_admin
+# 创建栈自动授予 stack_admin 并即时失效缓存，无需手动操作
 
 curl -X POST http://localhost:8080/vanilla/service/api/v1/create \
   -H "Content-Type: application/json" -H "x-auth-user: admin" \
@@ -178,19 +185,63 @@ curl -X POST http://localhost:8080/vanilla/history/api/v1/list \
 # 包含 创建栈/创建服务/添加端口/部署栈/停止栈/下架栈 等事件
 ```
 
-## 9. 常见问题
+## 9. K8s（Kubernetes）集群部署与验证
+
+> 平台已实现按集群 `type = K8S` 的部署链路（Deployment / Service / PVC / 探针 / 日志），资源映射与状态语义有单元测试固化。**Docker 链路已在真机跑通，K8s 链路本仓库未在真实集群完成 e2e**，以下为实机验证路径。
+
+### 9.1 准备
+
+- 一个可访问的 K8s 集群（API Server 地址，如 `https://<api-server>:6443`），账号具备 `vanilla` 命名空间的创建与部署权限（或预先创建该命名空间）。
+- 如需 TLS：`tlsVerify=true` 并在集群的 `dockerCertPath` 放置 `ca.crt` / `client.crt` / `client.key`（兼容 Docker 的 `ca.pem` / `cert.pem` / `key.pem` 命名）。
+
+### 9.2 创建集群
+
+```bash
+curl -X POST http://localhost:8080/vanilla/cluster/api/v1/create \
+  -H "Content-Type: application/json" -H "x-auth-user: admin" \
+  -d '{"clusterName":"k8s-1","type":"K8S","endpoint":"https://127.0.0.1:6443","tlsVerify":true,"dockerCertPath":"/etc/vanilla/k8s-certs"}'
+# 创建栈自动授予 stack_admin 并即时失效缓存，无需手动操作
+```
+
+### 9.3 部署与验证
+
+创建栈/服务/端口/卷（同第 8 节），然后：
+
+```bash
+curl -X POST .../stack/api/v1/deploy -d '{"stackId":1}'   # 创建 Deployment + Service + PVC
+curl -X POST .../stack/api/v1/status -d '{"stackId":1}'   # readyReplicas → RUNNING/PARTIAL；healthyCount
+curl -X POST .../stack/api/v1/logs  \
+  -d '{"stackId":1,"serviceId":1,"replicaIndex":0,"tail":200}'   # Pod 日志
+
+kubectl -n vanilla get deploy,svc,pvc   # 预期：vanilla-1-nginx / 对应 Service(ClusterIP|NodePort) / PVC
+# 声明端口 ≤ 2767 时宿主访问：NodePort = 30000 + 声明端口（如声明 80 → 30080）
+```
+
+停止（scale=0）、重新部署（createOrReplace 滚动）、下架（删 Deployment+Service、保留 PVC）、多副本、健康检查探针（服务配置 `healthCheckCmd`）均应可验证。
+
+### 9.4 已知取舍（K8s）
+
+| 项 | 说明 |
+|---|---|
+| CPU | Docker CPU shares 按 m 近似映射（1024 = 1 vCPU），非精确对应 |
+| 宿主端口 | NodePort 受 30000–32767 限制，仅「声明端口 ≤ 2767」映射；多副本不再逐副本偏移（由集群分发） |
+| HTTP 同步等待 | 部署接口不阻塞等待滚动完成，就绪状态由 status/healthyCount 轮询体现 |
+| 命名空间 | 统一 `vanilla`（代码常量 `K8S_NAMESPACE`），暂不可配置 |
+
+## 10. 常见问题
 
 | 现象 | 原因/处理 |
 |---|---|
 | 部署报 `Bind for 0.0.0.0:X failed` | 宿主端口被占用（如后端占用 8080），或服务间端口范围重叠；改用空闲端口，或调整服务端口配置 |
 | 部署报 `宿主端口 X 冲突` | 多副本端口偏移与其它服务端口重叠，部署前已拦截，调整端口即可 |
-| `No Permission` | 权限不足；创建集群/栈后记得 `DEL USER_INFO_<username>` 刷新角色缓存 |
+| K8s 部署报无权限 | 运行账号需能在 `vanilla` 命名空间创建 Deployment/Service/PVC（或预先创建命名空间） |
+| `No Permission` | 权限不足：`admin` 之外的用户缺少对应集群/栈角色，或集群/栈创建后角色缓存尚未自动失效（正常情况下会即时失效，仅异常时考虑 `DEL USER_INFO_<username>`） |
 | 镜像拉取超时 | Docker Hub 不可达，配置镜像加速（第 7 节） |
 | 中文乱码 | 终端编码问题，API 本身返回 UTF-8 JSON |
 | 更新接口响应字段为 null | MyBatis-Plus `updateById` 跳过 null 字段，**DB 数据不受影响**，仅响应 VO 显示问题 |
 
-## 10. 构建产物与监控
+## 11. 构建产物与监控
 
-- 应用：`target/vanilla-backend-0.0.1-SNAPSHOT.jar`（约 80MB）
+- 应用：`target/vanilla-backend-0.0.1-SNAPSHOT.jar`（约 96MB，含 fabric8 K8s 客户端）
 - 健康检查：`GET /vanilla/actuator/health`
 - 接口文档：`/vanilla/doc.html`（Knife4j）

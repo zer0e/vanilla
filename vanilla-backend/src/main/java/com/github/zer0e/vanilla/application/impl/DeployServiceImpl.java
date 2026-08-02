@@ -4,26 +4,37 @@ import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerResponse;
 import com.github.dockerjava.api.exception.NotFoundException;
+import com.github.dockerjava.core.command.LogContainerResultCallback;
 import com.github.dockerjava.api.model.Bind;
 import com.github.dockerjava.api.model.Container;
+import com.github.dockerjava.api.command.InspectContainerResponse.ContainerState;
+import com.github.dockerjava.api.command.HealthState;
 import com.github.dockerjava.api.model.ExposedPort;
+import com.github.dockerjava.api.model.HealthCheck;
 import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.Ports;
 import com.github.dockerjava.api.model.Volume;
 import com.github.zer0e.vanilla.application.DeployService;
 import com.github.zer0e.vanilla.application.HistoryService;
+import com.github.zer0e.vanilla.application.KubernetesStackService;
+import com.github.zer0e.vanilla.application.support.RuntimeStateResolver;
+import com.github.zer0e.vanilla.application.dto.ContainerLogsDto;
 import com.github.zer0e.vanilla.application.dto.CreateHistoryDto;
 import com.github.zer0e.vanilla.application.dto.DeployStackDto;
+import com.github.zer0e.vanilla.application.vo.ContainerLogVo;
 import com.github.zer0e.vanilla.application.vo.ServiceStatusVo;
 import com.github.zer0e.vanilla.application.vo.StackStatusVo;
 import com.github.zer0e.vanilla.common.Constants;
 import com.github.zer0e.vanilla.common.exception.BusinessException;
+import com.github.zer0e.vanilla.domain.ClusterType;
 import com.github.zer0e.vanilla.domain.DataStatus;
 import com.github.zer0e.vanilla.domain.Env;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.ClusterMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.PortMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.StackMapper;
 import com.github.zer0e.vanilla.infrastructure.db.mapper.VolumeMapper;
+import com.github.zer0e.vanilla.infrastructure.db.repository.ClusterDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.PortDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.ServiceDo;
 import com.github.zer0e.vanilla.infrastructure.db.repository.StackDo;
@@ -36,6 +47,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -51,14 +63,19 @@ public class DeployServiceImpl implements DeployService {
 
     private final DockerClientFactory dockerClientFactory;
     private final StackMapper stackMapper;
+    private final ClusterMapper clusterMapper;
     private final ServiceMapper serviceMapper;
     private final PortMapper portMapper;
     private final VolumeMapper volumeMapper;
     private final HistoryService historyService;
+    private final KubernetesStackService kubernetesStackService;
 
     @Override
     @PreAuthorize("hasAnyRole('stack_' + #deployStackDto.stackId + '_stack_admin')")
     public StackStatusVo deployStack(DeployStackDto deployStackDto) throws BusinessException {
+        if (isKubernetes(deployStackDto.getStackId())) {
+            return kubernetesStackService.deployStack(deployStackDto);
+        }
         StackDo stack = getStack(deployStackDto.getStackId());
         DockerClient client = dockerClientFactory.getClient(stack.getClusterId());
         List<ServiceDo> services = serviceMapper.selectServicesByStackIdAndSearch(stack.getId(), null);
@@ -83,6 +100,9 @@ public class DeployServiceImpl implements DeployService {
             "'stack_' + #deployStackDto.stackId + '_stack_member'," +
             "'stack_' + #deployStackDto.stackId + '_stack_readonly')")
     public StackStatusVo getStackStatus(DeployStackDto deployStackDto) throws BusinessException {
+        if (isKubernetes(deployStackDto.getStackId())) {
+            return kubernetesStackService.getStackStatus(deployStackDto);
+        }
         StackDo stack = getStack(deployStackDto.getStackId());
         DockerClient client = dockerClientFactory.getClient(stack.getClusterId());
         List<Container> containers = listStackContainers(client, stack.getId());
@@ -101,6 +121,10 @@ public class DeployServiceImpl implements DeployService {
             status.setServiceName(service.getServiceName());
             status.setReplicas(service.getReplicas() == null ? 1 : service.getReplicas());
             status.setRunningCount((int) running);
+            // 配置了健康检查时逐个 inspect 统计健康数，否则运行即可视为健康
+            status.setHealthyCount(hasHealthCheck(service)
+                    ? countHealthy(client, svcContainers)
+                    : (int) running);
             status.setStatus(resolveStatus(svcContainers.size(), running));
             serviceStatuses.add(status);
         }
@@ -115,6 +139,10 @@ public class DeployServiceImpl implements DeployService {
     @Override
     @PreAuthorize("hasAnyRole('stack_' + #deployStackDto.stackId + '_stack_admin')")
     public void stopStack(DeployStackDto deployStackDto) throws BusinessException {
+        if (isKubernetes(deployStackDto.getStackId())) {
+            kubernetesStackService.stopStack(deployStackDto);
+            return;
+        }
         StackDo stack = getStack(deployStackDto.getStackId());
         DockerClient client = dockerClientFactory.getClient(stack.getClusterId());
         List<Container> containers = listStackContainers(client, stack.getId());
@@ -131,10 +159,88 @@ public class DeployServiceImpl implements DeployService {
     @Override
     @PreAuthorize("hasAnyRole('stack_' + #deployStackDto.stackId + '_stack_admin')")
     public void removeStack(DeployStackDto deployStackDto) throws BusinessException {
+        if (isKubernetes(deployStackDto.getStackId())) {
+            kubernetesStackService.removeStack(deployStackDto);
+            return;
+        }
         StackDo stack = getStack(deployStackDto.getStackId());
         DockerClient client = dockerClientFactory.getClient(stack.getClusterId());
         removeStackContainers(client, stack.getId());
         recordHistory(stack.getId(), "下架栈 " + stack.getStackName());
+    }
+
+    @Override
+    @PreAuthorize("hasAnyRole('stack_' + #containerLogsDto.stackId + '_stack_admin'," +
+            "'stack_' + #containerLogsDto.stackId + '_stack_member'," +
+            "'stack_' + #containerLogsDto.stackId + '_stack_readonly')")
+    public ContainerLogVo getContainerLog(ContainerLogsDto containerLogsDto) throws BusinessException {
+        if (isKubernetes(containerLogsDto.getStackId())) {
+            return kubernetesStackService.getContainerLog(containerLogsDto);
+        }
+        StackDo stack = getStack(containerLogsDto.getStackId());
+        DockerClient client = dockerClientFactory.getClient(stack.getClusterId());
+        List<Container> containers = listServiceContainers(client, stack.getId(), containerLogsDto.getServiceId());
+        if (CollectionUtils.isEmpty(containers)) {
+            throw new BusinessException("服务未部署，无可查看日志的容器");
+        }
+        Container target = selectReplicaContainer(containers, containerLogsDto.getReplicaIndex());
+        int tail = containerLogsDto.getTail() == null
+                ? DEFAULT_LOG_TAIL
+                : Math.min(Math.max(containerLogsDto.getTail(), 1), MAX_LOG_TAIL);
+
+        ContainerLogVo vo = new ContainerLogVo();
+        vo.setContainerId(target.getId());
+        vo.setContainerName(firstContainerName(target));
+        vo.setLog(fetchContainerLogs(client, target.getId(), tail));
+        return vo;
+    }
+
+    /**
+     * 选择一个副本容器：单副本直接返回；指定副本索引时按名字后缀匹配；
+     * 否则优先返回运行中的副本（多副本时日志查看默认取第一个运行中的）
+     */
+    private Container selectReplicaContainer(List<Container> containers, Integer replicaIndex) {
+        if (containers.size() == 1) {
+            return containers.get(0);
+        }
+        if (replicaIndex != null) {
+            String suffix = "-" + replicaIndex;
+            for (Container container : containers) {
+                if (firstContainerName(container) != null && firstContainerName(container).endsWith(suffix)) {
+                    return container;
+                }
+            }
+        }
+        return containers.stream()
+                .filter(c -> "running".equalsIgnoreCase(c.getState()))
+                .findFirst()
+                .orElse(containers.get(0));
+    }
+
+    private String firstContainerName(Container container) {
+        if (container.getNames() == null || container.getNames().length == 0) {
+            return container.getId();
+        }
+        return stripSlash(container.getNames()[0]);
+    }
+
+    /**
+     * 读取容器最近日志（stdout + stderr）。docker-java 的 LogContainerResultCallback
+     * 会在全部输出落盘后把整段日志拼成一个字符串
+     */
+    private String fetchContainerLogs(DockerClient client, String containerId, int tail) throws BusinessException {
+        try {
+            LogContainerResultCallback callback = client.logContainerCmd(containerId)
+                    .withStdOut(true)
+                    .withStdErr(true)
+                    .withTail(tail)
+                    .exec(new LogContainerResultCallback());
+            callback.awaitCompletion();
+            return callback.toString();
+        } catch (Exception e) {
+            log.error("read container log err, containerId={}", containerId, e);
+            throw new BusinessException("读取容器日志失败：" + containerId);
+        }
     }
 
     /**
@@ -332,6 +438,10 @@ public class DeployServiceImpl implements DeployService {
             cmd.withEnv(env);
         }
         buildCommand(cmd, service);
+        HealthCheck healthCheck = buildHealthCheck(service);
+        if (healthCheck != null) {
+            cmd.withHealthcheck(healthCheck);
+        }
 
         // 端口映射、卷挂载、资源限制需放入同一个 HostConfig，否则 withHostConfig 会覆盖前面的结果。
         // 多副本时宿主端口按副本索引递增偏移，避免端口冲突
@@ -405,6 +515,54 @@ public class DeployServiceImpl implements DeployService {
         return envs.stream().map(e -> e.getName() + "=" + e.getValue()).toList();
     }
 
+    private boolean hasHealthCheck(ServiceDo service) {
+        return service != null && StringUtils.hasText(service.getHealthCheckCmd());
+    }
+
+    /**
+     * 构建 Docker HEALTHCHECK（CMD-SHELL 形式）。未配置健康检查时返回 null。
+     * 参数采用平台默认值：间隔 30s / 超时 10s / 重试 3 次 / 启动宽限 5s
+     */
+    HealthCheck buildHealthCheck(ServiceDo service) {
+        if (!hasHealthCheck(service)) {
+            return null;
+        }
+        return new HealthCheck()
+                .withTest(List.of("CMD-SHELL", service.getHealthCheckCmd().trim()))
+                // Docker API 以纳秒为单位
+                .withInterval(Duration.ofSeconds(HEALTHCHECK_INTERVAL_SECONDS).toNanos())
+                .withTimeout(Duration.ofSeconds(HEALTHCHECK_TIMEOUT_SECONDS).toNanos())
+                .withRetries(HEALTHCHECK_RETRIES)
+                .withStartPeriod(Duration.ofSeconds(HEALTHCHECK_START_PERIOD_SECONDS).toNanos());
+    }
+
+    /**
+     * 统计运行中且健康的容器数。配置了健康检查的容器只有 docker 标记 healthy 才计健康；
+     * 尚未产生健康状态（probe 启动期）或 inspect 异常时按健康处理，避免误报
+     */
+    int countHealthy(DockerClient client, List<Container> containers) {
+        if (CollectionUtils.isEmpty(containers)) {
+            return 0;
+        }
+        int healthy = 0;
+        for (Container container : containers) {
+            if (!"running".equalsIgnoreCase(container.getState())) {
+                continue;
+            }
+            try {
+                ContainerState state = client.inspectContainerCmd(container.getId()).exec().getState();
+                HealthState health = state.getHealth();
+                if (health == null || "healthy".equalsIgnoreCase(health.getStatus())) {
+                    healthy++;
+                }
+            } catch (Exception e) {
+                log.warn("inspect container health err, containerId={}", container.getId(), e);
+                healthy++;
+            }
+        }
+        return healthy;
+    }
+
     private Map<String, String> buildLabels(Integer stackId, ServiceDo service) {
         Map<String, String> labels = new HashMap<>();
         labels.put(Constants.STACK_ID_LABEL, String.valueOf(stackId));
@@ -441,30 +599,21 @@ public class DeployServiceImpl implements DeployService {
         }
     }
 
+    private static final int DEFAULT_LOG_TAIL = 500;
+    private static final int MAX_LOG_TAIL = 10000;
+
+    // Docker HEALTHCHECK 默认参数（秒）
+    private static final int HEALTHCHECK_INTERVAL_SECONDS = 30;
+    private static final int HEALTHCHECK_TIMEOUT_SECONDS = 10;
+    private static final int HEALTHCHECK_RETRIES = 3;
+    private static final int HEALTHCHECK_START_PERIOD_SECONDS = 5;
+
     String resolveStatus(int total, long running) {
-        if (total == 0) {
-            return "NONE";
-        }
-        if (running == total) {
-            return "RUNNING";
-        }
-        if (running == 0) {
-            return "STOPPED";
-        }
-        return "PARTIAL";
+        return RuntimeStateResolver.resolveStatus(total, running);
     }
 
     String resolveStackStatus(List<ServiceStatusVo> services) {
-        if (services.isEmpty() || services.stream().allMatch(s -> "NONE".equals(s.getStatus()))) {
-            return "NONE";
-        }
-        if (services.stream().allMatch(s -> "RUNNING".equals(s.getStatus()))) {
-            return "RUNNING";
-        }
-        if (services.stream().allMatch(s -> "STOPPED".equals(s.getStatus()) || "NONE".equals(s.getStatus()))) {
-            return "STOPPED";
-        }
-        return "PARTIAL";
+        return RuntimeStateResolver.resolveStackStatus(services);
     }
 
     private StackDo getStack(Integer stackId) throws BusinessException {
@@ -473,6 +622,15 @@ public class DeployServiceImpl implements DeployService {
             throw new BusinessException(Constants.STACK_NOT_EXIST);
         }
         return stack;
+    }
+
+    /**
+     * 按集群类型分流：K8S 集群委托 KubernetesStackService，其余走 Docker 链路
+     */
+    private boolean isKubernetes(Integer stackId) throws BusinessException {
+        StackDo stack = getStack(stackId);
+        ClusterDo cluster = clusterMapper.selectById(stack.getClusterId());
+        return cluster != null && ClusterType.K8S.name().equalsIgnoreCase(cluster.getType());
     }
 
     private void recordHistory(Integer stackId, String event) {

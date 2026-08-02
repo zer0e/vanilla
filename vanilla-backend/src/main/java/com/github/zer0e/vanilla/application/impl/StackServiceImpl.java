@@ -84,6 +84,8 @@ public class StackServiceImpl implements StackService {
                 .build();
 
         userRoleMapper.insert(userRoleDo);
+        // 新授予的 stack_admin 立即生效，避免依赖 Redis 24h 权限缓存的延迟
+        userService.evictUserCache(currentUserName);
         recordHistory(stackDo.getId(), "创建栈 " + stackDo.getStackName());
 
         return StackConverter.INSTANCE.toVo(stackDo);

@@ -43,6 +43,11 @@ public class CreateServiceDto {
     private String terminationGracePeriodSeconds;
 
     /**
+     * 健康检查命令（Docker HEALTHCHECK，如 curl -f http://localhost/health || exit 1）
+     */
+    private String healthCheckCmd;
+
+    /**
      * 更新策略 PollingUpdate
      */
     private String strategy;

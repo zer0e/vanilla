@@ -35,7 +35,22 @@ public class ClusterDo extends Base {
     private Boolean tlsVerify;
 
     /**
-     * Docker TLS 证书目录
+     * Docker TLS 证书目录（兼容直接指定服务器目录的场景）
      */
     private String dockerCertPath;
+
+    /**
+     * CA 证书（PEM），用户上传后存库
+     */
+    private String caCert;
+
+    /**
+     * 客户端证书（PEM）
+     */
+    private String clientCert;
+
+    /**
+     * 客户端私钥（PEM）
+     */
+    private String clientKey;
 }

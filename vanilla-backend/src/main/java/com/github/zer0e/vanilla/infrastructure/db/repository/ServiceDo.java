@@ -51,6 +51,11 @@ public class ServiceDo extends Base {
     private String terminationGracePeriodSeconds;
 
     /**
+     * 健康检查命令（Docker HEALTHCHECK）
+     */
+    private String healthCheckCmd;
+
+    /**
      * 更新策略 RollingUpdate
      */
     private String strategy;

@@ -1,8 +1,8 @@
 # Vanilla — 服务部署平台后端
 
-基于 Docker / K8s 的服务部署管理平台后端。以「集群 → 栈 → 服务」为模型组织容器编排资源，提供资源 CRUD、基于角色的权限控制（RBAC），并通过 docker-java 直连 Docker daemon 完成**部署 / 状态查询 / 停止 / 下架**的全生命周期管理。
+基于 Docker / K8s 的服务部署管理平台后端。以「集群 → 栈 → 服务」为模型组织容器编排资源，提供资源 CRUD、基于角色的权限控制（RBAC），并通过 docker-java 直连 Docker daemon、fabric8 直连 Kubernetes API 完成**部署 / 状态查询 / 停止 / 下架 / 日志**的全生命周期管理。
 
-> 当前已完整实现 **Docker 部署链路**（K8s 为后续扩展方向，数据模型已预留 `type` 字段区分）。
+> **Docker 与 K8s 双运行时**：按集群 `type`（DOCKER / K8S）自动分流——Docker 走容器/标签模型（已验证 e2e），K8s 走 Deployment/Service/PVC 模型（资源映射与状态语义有单元测试固化，真机验证步骤见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) 第 9 节）。
 
 ## 功能特性
 
@@ -12,11 +12,13 @@
   - 服务（Service）：镜像、副本数、CPU/内存限制、命令、环境变量（JSON 存储）
   - 端口（Port）：服务端口声明（协议 + 端口），部署时映射到宿主
   - 卷（Volume）：栈级卷声明（名称 + 大小）
-- **部署生命周期**（Docker）
-  - 部署：拉取镜像 → 按副本数创建并启动容器（env / 端口映射 / 资源限制 / 标签）
-  - 状态查询：按标签分组统计各服务 RUNNING / STOPPED / PARTIAL / NONE
-  - 停止 / 下架：幂等操作，部署前自动清理同栈旧容器
-  - 部署前**宿主端口全局预校验**，冲突快速失败；中途失败自动回滚清理
+- **部署生命周期**（Docker / K8s 双运行时）
+  - Docker：拉取镜像 → 按副本数创建并启动容器（env / 端口映射 / 资源限制 / 标签 / HEALTHCHECK）
+  - K8s：栈 → `vanilla` 命名空间下 Deployment + Service（NodePort），卷 → PVC
+  - 状态查询：Docker 按容器标签、K8s 按 Deployment readyReplicas 统计 RUNNING / STOPPED / PARTIAL / NONE，含**健康数 healthyCount**
+  - 停止 / 下架：幂等操作，部署前自动清理同栈旧资源；K8s 下架保留 PVC
+  - **容器日志**：按栈 + 服务 + 副本索引查看最近 N 行（stdout+stderr）
+  - 部署前**宿主端口全局预校验**（Docker）、冲突快速失败；中途失败自动回滚清理
 - **RBAC 鉴权**：`admin`（全局）→ `cluster_admin / cluster_user`（集群级）→ `stack_admin / stack_member / stack_readonly`（栈级）
 - **用户管理**：用户 CRUD + 角色绑定（全局/集群/栈作用域），变更即时失效缓存
 - **更新策略**：`Recreate`（默认，先删后建）与 `RollingUpdate`（逐副本替换，其余副本持续服务；副本数变化时退化为全量重建）
@@ -30,7 +32,7 @@
 | 语言 / 框架 | Java 17 · Spring Boot 3.3.1 · Spring Security |
 | ORM | MyBatis-Plus 3.5.7 · PageHelper 5.3.2 |
 | 存储 | MySQL 8（软删除 + JSON 列）· Redis 7（用户/角色缓存）· Redisson 3.32（分布式锁） |
-| Docker | docker-java 3.3.6（core + httpclient5 transport） |
+| 运行时 | Docker：docker-java 3.3.6（core + httpclient5 transport）· K8s：fabric8 kubernetes-client 6.13.0 |
 | 其他 | MapStruct 1.5 · Knife4j 4.4 · Lombok · spring-boot-starter-actuator |
 
 ## 架构概览
@@ -38,7 +40,7 @@
 ```
 ┌────────────────────────── web（Controller 层）──────────────────────────┐
 │  ClusterController · StackController · ServiceController                 │
-│  PortController · VolumeController · HistoryController · TestController  │
+│  PortController · VolumeController · HistoryController                    │
 └───────────────┬──────────────────────────────────────────────────────────┘
                 │ @PreAuthorize（方法级 RBAC）
 ┌───────────────▼──────────────── application（应用层）────────────────────┐
@@ -158,11 +160,7 @@ curl -X POST http://localhost:8080/vanilla/stack/api/v1/deploy \
   -d '{"stackId":1}'
 ```
 
-> ⚠️ **重要**：`admin` 创建集群/栈后，系统会为其授予对应 `cluster_admin` / `stack_admin` 角色。用户信息缓存在 Redis（24h），若紧接着调用依赖新角色的接口，需先清除缓存：
-
-```bash
-docker exec <redis> redis-cli DEL USER_INFO_admin
-```
+> **角色即时生效**：创建集群/栈后系统会自动失效创建者的权限缓存（`USER_INFO_<用户名>`），新授予的 `cluster_admin` / `stack_admin` 立即生效，无需手动清理；用户管理页的角色变更同样即时失效。
 
 ## API 一览
 
@@ -180,6 +178,7 @@ docker exec <redis> redis-cli DEL USER_INFO_admin
 | | `POST /stack/api/v1/status` | **查询栈运行状态** |
 | | `POST /stack/api/v1/stop` | **停止栈** |
 | | `POST /stack/api/v1/remove` | **下架栈（停+删容器）** |
+| | `POST /stack/api/v1/logs` | **查看服务容器日志** |
 | 服务 | `POST /service/api/v1/create` | 创建服务 |
 | | `POST /service/api/v1/update` | 修改服务 |
 | | `POST /service/api/v1/delete` | 删除服务 |
@@ -199,6 +198,24 @@ docker exec <redis> redis-cli DEL USER_INFO_admin
 | | `POST /user/api/v1/list` | 分页查询用户（需 admin） |
 
 完整字段、鉴权角色与响应示例见 **[docs/API.md](docs/API.md)**。
+
+## K8s 运行时映射
+
+K8S 类型集群的栈操作由 `KubernetesStackServiceImpl` 承担（`DeployServiceImpl` 按集群类型自动分流），资源统一落在 `vanilla` 命名空间：
+
+| 平台概念 | K8s 资源 | 说明 |
+|---|---|---|
+| 栈 | `vanilla` 命名空间 + `com.vanilla.stack_id` 标签 | 命名空间不存在时自动创建（无权限则需预先创建） |
+| 服务 | `Deployment`（名 `vanilla-{stackId}-{serviceName}`） | 副本数、镜像、env、容器端口、资源限制（CPU shares→m、内存 Mi） |
+| 更新策略 | Deployment strategy | `Recreate` / `RollingUpdate`（K8s 原生处理滚动与扩缩容） |
+| 健康检查 | readiness + liveness exec 探针 | 与 Docker HEALTHCHECK 参数一致（`sh -c '<healthCheckCmd>'`） |
+| 端口 | Service（ClusterIP，声明端口 ≤ 2767 时附加 NodePort 30000+端口） | NodePort 即宿主访问地址（`nodePort = 30000 + 声明端口`） |
+| 卷 | `PersistentVolumeClaim`（名 `vanilla-{stackId}-{serviceId}-{volumeName}`，ReadWriteOnce） | 下架不删 PVC，与 Docker named volume 语义一致 |
+| 停止 | Deployment scale=0 | 状态查询反映为 STOPPED（Deployment 仍存在） |
+| 下架 | 删除 Deployment + Service（保留 PVC） | — |
+| 日志 | 按标签选 Pod → `getLog()` 截取最近 N 行 | 多副本按 Pod 名排序取指定索引 |
+
+集群连接复用 `t_cluster.endpoint`（API Server 地址，`tcp://` 自动转 https）+ `dockerCertPath`（兼容 `ca.crt/client.crt/client.key` 与 `ca.pem/cert.pem/key.pem`），按 clusterId 缓存并在集群更新/删除时失效。
 
 ## RBAC 权限模型
 
@@ -223,5 +240,5 @@ docker exec <redis> redis-cli DEL USER_INFO_admin
 
 ## 测试验证
 
-- **单元测试**：`DeployServiceImplTest`（14 个用例，Mockito）锁住部署核心逻辑——端口绑定写入 HostConfig、宿主端口跨服务冲突预校验、容器命名、状态映射、失败回滚、Recreate 先删后建、RollingUpdate 逐副本替换。运行：`./mvnw test`（无需外部依赖，Spring 上下文测试已标注 `@Disabled`）。
+- **单元测试**：`DeployServiceImplTest`（29 个用例）+ `KubernetesStackServiceImplTest`（9 个用例，Mockito）。Docker 侧锁住端口绑定写入 HostConfig、宿主端口跨服务冲突预校验、容器命名、状态映射、失败回滚、Recreate 先删后建、RollingUpdate 逐副本替换、容器日志选择与读取、健康检查 HEALTHCHECK 构建与健康统计；K8s 侧锁住集群类型识别、Deployment/Service/PVC 资源映射、readyReplicas 状态语义（RUNNING/PARTIAL/STOPPED/NONE）、停止 scale=0、下架保留 PVC、日志按副本截取。运行：`./mvnw test`（无需外部依赖，Spring 上下文测试已标注 `@Disabled`）。
 - **端到端验证**：已在云主机（Alibaba Cloud Linux 4 + Docker 24.0.9 + MySQL 8.0 + Redis 7.2）跑通集群/栈/服务/端口/卷 CRUD、RBAC、部署→状态→停止→重新部署→下架、多副本（端口偏移）与多服务场景。回归测试中发现的端口映射丢失、多副本端口冲突、软删除过滤等缺陷均已修复并固化为测试。

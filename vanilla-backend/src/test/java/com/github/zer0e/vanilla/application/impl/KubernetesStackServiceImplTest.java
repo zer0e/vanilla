@@ -1,0 +1,535 @@
+package com.github.zer0e.vanilla.application.impl;
+
+import com.github.zer0e.vanilla.application.HistoryService;
+import com.github.zer0e.vanilla.application.dto.ContainerLogsDto;
+import com.github.zer0e.vanilla.application.dto.DeployStackDto;
+import com.github.zer0e.vanilla.application.vo.ContainerLogVo;
+import com.github.zer0e.vanilla.application.vo.StackStatusVo;
+import com.github.zer0e.vanilla.common.Constants;
+import com.github.zer0e.vanilla.domain.DataStatus;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.ClusterMapper;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.PortMapper;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.ServiceMapper;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.StackMapper;
+import com.github.zer0e.vanilla.infrastructure.db.mapper.VolumeMapper;
+import com.github.zer0e.vanilla.infrastructure.db.repository.ClusterDo;
+import com.github.zer0e.vanilla.infrastructure.db.repository.PortDo;
+import com.github.zer0e.vanilla.infrastructure.db.repository.ServiceDo;
+import com.github.zer0e.vanilla.infrastructure.db.repository.StackDo;
+import com.github.zer0e.vanilla.infrastructure.db.repository.VolumeDo;
+import com.github.zer0e.vanilla.infrastructure.kubernetes.KubernetesClientFactory;
+import io.fabric8.kubernetes.api.model.PodBuilder;
+import io.fabric8.kubernetes.api.model.PodListBuilder;
+import io.fabric8.kubernetes.api.model.Namespace;
+import io.fabric8.kubernetes.api.model.NamespaceList;
+import io.fabric8.kubernetes.api.model.PersistentVolumeClaim;
+import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.Service;
+import io.fabric8.kubernetes.api.model.ServiceList;
+import io.fabric8.kubernetes.api.model.apps.Deployment;
+import io.fabric8.kubernetes.api.model.apps.DeploymentBuilder;
+import io.fabric8.kubernetes.api.model.apps.DeploymentList;
+import io.fabric8.kubernetes.api.model.apps.DeploymentListBuilder;
+import io.fabric8.kubernetes.api.model.apps.DeploymentSpecBuilder;
+import io.fabric8.kubernetes.api.model.apps.DeploymentStatusBuilder;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.dsl.AppsAPIGroupDSL;
+import io.fabric8.kubernetes.client.dsl.MixedOperation;
+import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
+import io.fabric8.kubernetes.client.dsl.PodResource;
+import io.fabric8.kubernetes.client.dsl.Resource;
+import io.fabric8.kubernetes.client.dsl.RollableScalableResource;
+import io.fabric8.kubernetes.client.dsl.ServiceResource;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.Collections;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * KubernetesStackServiceImpl 核心行为：K8S 集群识别、资源映射、状态语义、停止/下架/日志
+ */
+@ExtendWith(MockitoExtension.class)
+class KubernetesStackServiceImplTest {
+
+    @Mock
+    private KubernetesClientFactory kubernetesClientFactory;
+    @Mock
+    private StackMapper stackMapper;
+    @Mock
+    private ClusterMapper clusterMapper;
+    @Mock
+    private ServiceMapper serviceMapper;
+    @Mock
+    private PortMapper portMapper;
+    @Mock
+    private VolumeMapper volumeMapper;
+    @Mock
+    private HistoryService historyService;
+    @Mock
+    private KubernetesClient client;
+
+    private KubernetesStackServiceImpl kubeStackService;
+
+    @BeforeEach
+    void setUp() {
+        kubeStackService = new KubernetesStackServiceImpl(
+                kubernetesClientFactory, stackMapper, clusterMapper, serviceMapper,
+                portMapper, volumeMapper, historyService);
+    }
+
+    // ---- K8S 集群识别 ----
+
+    @Test
+    void isKubernetes_trueWhenClusterTypeIsK8S() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(ClusterDo.builder().id(1).type("K8S").build());
+
+        assertThat(kubeStackService.isKubernetes(1)).isTrue();
+    }
+
+    @Test
+    void isKubernetes_falseForDockerCluster() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(ClusterDo.builder().id(1).type("DOCKER").build());
+
+        assertThat(kubeStackService.isKubernetes(1)).isFalse();
+    }
+
+    // ---- 部署：Deployment / Service / PVC 资源映射 ----
+
+    @Test
+    void deployStack_createsDeploymentWithCorrectMapping() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(service(1, "nginx", 2)));
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
+        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+
+        stubNamespace();
+        Deps deps = stubDeployments();
+        stubPvc();
+        stubServicesList(Collections.emptyList());
+
+        kubeStackService.deployStack(new DeployStackDto(1));
+
+        ArgumentCaptor<Deployment> captor = ArgumentCaptor.forClass(Deployment.class);
+        verify(deps.nsOp, atLeastOnce()).resource(captor.capture());
+        Deployment deployment = captor.getValue();
+        assertThat(deployment.getMetadata().getName()).isEqualTo("vanilla-1-nginx");
+        assertThat(deployment.getMetadata().getLabels().get(Constants.STACK_ID_LABEL)).isEqualTo("1");
+        assertThat(deployment.getMetadata().getLabels().get(Constants.SERVICE_ID_LABEL)).isEqualTo("1");
+        assertThat(deployment.getSpec().getReplicas()).isEqualTo(2);
+        assertThat(deployment.getSpec().getStrategy().getType()).isEqualTo("Recreate");
+        assertThat(deployment.getSpec().getTemplate().getSpec().getContainers().get(0).getImage())
+                .isEqualTo("nginx:latest");
+        assertThat(deployment.getSpec().getTemplate().getSpec().getContainers().get(0).getPorts().get(0)
+                .getContainerPort()).isEqualTo(80);
+        assertThat(deployment.getSpec().getTemplate().getSpec().getContainers().get(0).getArgs())
+                .isNullOrEmpty();
+        verify(historyService).createHistory(any());
+    }
+
+    @Test
+    void deployStack_attachesVolumeMountsWhenVolumesConfigured() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(service(1, "nginx", 1)));
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(Collections.emptyList());
+        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null))
+                .thenReturn(List.of(VolumeDo.builder().stackId(1).serviceId(1)
+                        .volumeName("data").size(5).mountPath("/data").build()));
+
+        stubNamespace();
+        Deps deps = stubDeployments();
+        stubPvc();
+        stubServicesList(Collections.emptyList());
+
+        kubeStackService.deployStack(new DeployStackDto(1));
+
+        ArgumentCaptor<Deployment> captor = ArgumentCaptor.forClass(Deployment.class);
+        verify(deps.nsOp, atLeastOnce()).resource(captor.capture());
+        Deployment deployment = captor.getValue();
+        assertThat(deployment.getSpec().getTemplate().getSpec().getVolumes().get(0).getName())
+                .isEqualTo("vanilla-1-1-data");
+        assertThat(deployment.getSpec().getTemplate().getSpec().getVolumes().get(0)
+                .getPersistentVolumeClaim().getClaimName()).isEqualTo("vanilla-1-1-data");
+        assertThat(deployment.getSpec().getTemplate().getSpec().getContainers().get(0)
+                .getVolumeMounts().get(0).getMountPath()).isEqualTo("/data");
+    }
+
+    // ---- Service 幂等：createOrReplace 撞 NodePort 的回归修复 ----
+
+    @Test
+    void deployStack_serviceAlreadyExistsWithSameSpec_isIdempotent() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(service(1, "nginx", 1)));
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
+        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+
+        stubNamespace();
+        stubDeployments();
+        stubPvc();
+        Services s = stubServicesList(Collections.emptyList());
+        // 集群上已存在同 spec 的 Service（NodePort 30080）→ 幂等跳过，不重复创建
+        io.fabric8.kubernetes.api.model.Service existing = new io.fabric8.kubernetes.api.model.ServiceBuilder()
+                .withNewMetadata().withName("vanilla-1-nginx").endMetadata()
+                .withNewSpec().withType("NodePort")
+                .addNewPort().withPort(80).withProtocol("TCP").withNodePort(30080)
+                .withTargetPort(new io.fabric8.kubernetes.api.model.IntOrString(80)).endPort()
+                .endSpec()
+                .build();
+        io.fabric8.kubernetes.client.dsl.ServiceResource existingRes = mock(
+                io.fabric8.kubernetes.client.dsl.ServiceResource.class);
+        when(s.svcNsOp.withName("vanilla-1-nginx")).thenReturn(existingRes);
+        when(existingRes.get()).thenReturn(existing);
+
+        kubeStackService.deployStack(new DeployStackDto(1));
+
+        // 未发生创建/删除（回归：createOrReplace 会报 nodePort already allocated）
+        verify(s.svcNsOp, never()).resource(any());
+        verify(existingRes, never()).delete();
+    }
+
+    @Test
+    void deployStack_serviceSpecChanged_recreatesService() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(service(1, "nginx", 1)));
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
+        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+
+        stubNamespace();
+        stubDeployments();
+        stubPvc();
+        Services s = stubServicesList(Collections.emptyList());
+        // 已存在但 NodePort 不同 → 删旧建新
+        io.fabric8.kubernetes.api.model.Service stale = new io.fabric8.kubernetes.api.model.ServiceBuilder()
+                .withNewMetadata().withName("vanilla-1-nginx").endMetadata()
+                .withNewSpec().withType("NodePort")
+                .addNewPort().withPort(80).withProtocol("TCP").withNodePort(30099)
+                .withTargetPort(new io.fabric8.kubernetes.api.model.IntOrString(80)).endPort()
+                .endSpec()
+                .build();
+        io.fabric8.kubernetes.client.dsl.ServiceResource staleRes = mock(
+                io.fabric8.kubernetes.client.dsl.ServiceResource.class);
+        when(s.svcNsOp.withName("vanilla-1-nginx")).thenReturn(staleRes);
+        when(staleRes.get()).thenReturn(stale);
+        when(staleRes.delete()).thenReturn(Collections.emptyList());
+
+        kubeStackService.deployStack(new DeployStackDto(1));
+
+        verify(staleRes).delete();
+        verify(s.svcNsOp).resource(any(io.fabric8.kubernetes.api.model.Service.class));
+    }
+
+    @Test
+    void deployStack_serviceWithoutPorts_skipsServiceButCreatesDeployment() throws Exception {
+        // 回归：无端口声明的服务不应创建 Service（k8s 拒绝 spec.ports 为空的 Service），Deployment 照常
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(service(1, "worker", 1)));
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(Collections.emptyList());
+        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+
+        stubNamespace();
+        Deps deps = stubDeployments();
+        stubPvc();
+        stubServicesList(Collections.emptyList());
+
+        kubeStackService.deployStack(new DeployStackDto(1));
+
+        verify(deps.nsOp, atLeastOnce()).resource(any(Deployment.class));
+    }
+
+    @Test
+    void deployStack_removesOrphanServicesOfDeletedServices() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(service(1, "nginx", 1)));
+        when(portMapper.selectPortsByServiceId(1)).thenReturn(List.of(port("tcp", 80)));
+        when(volumeMapper.selectVolumesByServiceIdAndSearch(1, null)).thenReturn(Collections.emptyList());
+
+        stubNamespace();
+        stubDeployments();
+        stubPvc();
+        // 集群上残留一个已删除服务的 Service（service_id=9 不在现存服务里）
+        io.fabric8.kubernetes.api.model.Service stale = new io.fabric8.kubernetes.api.model.ServiceBuilder()
+                .withNewMetadata()
+                .withName("vanilla-9-old")
+                .addToLabels(Constants.STACK_ID_LABEL, "1")
+                .addToLabels(Constants.SERVICE_ID_LABEL, "9")
+                .endMetadata()
+                .build();
+        Services s = stubServicesList(List.of(stale));
+        io.fabric8.kubernetes.client.dsl.ServiceResource staleRes = mock(
+                io.fabric8.kubernetes.client.dsl.ServiceResource.class);
+        when(s.svcNsOp.withName("vanilla-9-old")).thenReturn(staleRes);
+        when(staleRes.delete()).thenReturn(Collections.emptyList());
+
+        kubeStackService.deployStack(new DeployStackDto(1));
+
+        // 孤儿 Service 被清理
+        verify(staleRes).delete();
+    }
+
+    // ---- 状态：readyReplicas → RUNNING / PARTIAL / STOPPED / NONE ----
+
+    @Test
+    void getStackStatus_mapsRunningReadyReplicas() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(service(1, "nginx", 2), service(2, "static", 1)));
+        stubDeploymentsList(deployment(1, "vanilla-1-nginx", "1", 2, 2),
+                deployment(2, "vanilla-1-static", "2", 1, 1));
+
+        StackStatusVo vo = kubeStackService.getStackStatus(new DeployStackDto(1));
+
+        assertThat(vo.getStatus()).isEqualTo("RUNNING");
+        assertThat(vo.getServices()).hasSize(2);
+        assertThat(vo.getServices().stream()
+                .filter(s -> s.getServiceName().equals("nginx")).findFirst().orElseThrow()
+                .getHealthyCount()).isEqualTo(2);
+    }
+
+    @Test
+    void getStackStatus_mapsPartialAndStoppedAndNone() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        when(serviceMapper.selectServicesByStackIdAndSearch(1, null))
+                .thenReturn(List.of(service(1, "nginx", 2), service(2, "static", 1), service(3, "gone", 1)));
+        // nginx 2 目标 1 就绪 → PARTIAL；static 缩放为 0 → STOPPED；gone 无 deployment → NONE
+        stubDeploymentsList(deployment(1, "vanilla-1-nginx", "1", 2, 1),
+                deployment(2, "vanilla-1-static", "2", 0, 0));
+
+        StackStatusVo vo = kubeStackService.getStackStatus(new DeployStackDto(1));
+
+        assertThat(vo.getStatus()).isEqualTo("PARTIAL");
+        assertThat(vo.getServices().stream()
+                .filter(s -> s.getServiceName().equals("static")).findFirst().orElseThrow().getStatus())
+                .isEqualTo("STOPPED");
+        assertThat(vo.getServices().stream()
+                .filter(s -> s.getServiceName().equals("gone")).findFirst().orElseThrow().getStatus())
+                .isEqualTo("NONE");
+    }
+
+    // ---- 停止 / 下架 / 日志 ----
+
+    @Test
+    void stopStack_scalesAllDeploymentsToZero() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        Deps deps = stubDeployments();
+        stubDeploymentsListOn(deps, deployment(1, "vanilla-1-nginx", "1", 2, 2));
+        RollableScalableResource scaleResource = mock(RollableScalableResource.class);
+        when(deps.nsOp.withName("vanilla-1-nginx")).thenReturn(scaleResource);
+
+        kubeStackService.stopStack(new DeployStackDto(1));
+
+        verify(scaleResource).scale(0);
+        verify(historyService).createHistory(any());
+    }
+
+    @Test
+    void removeStack_deletesDeploymentsAndServicesButKeepsPvc() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+        Deps deps = stubDeployments();
+        stubDeploymentsListOn(deps, deployment(1, "vanilla-1-nginx", "1", 2, 2));
+        RollableScalableResource<Deployment> deleteRes = mock(RollableScalableResource.class);
+        when(deps.nsOp.withName("vanilla-1-nginx")).thenReturn(deleteRes);
+        when(deleteRes.delete()).thenReturn(Collections.emptyList());
+
+        Services s = stubServicesList(Collections.emptyList());
+
+        kubeStackService.removeStack(new DeployStackDto(1));
+
+        verify(deleteRes).delete();
+        // 服务列表为空 → 不实际删除任何 Service；PVC 从不删除（与 Docker named volume 语义一致）
+        verify(s.svcNsOp, never()).withName(anyString());
+        verify(client, never()).persistentVolumeClaims();
+    }
+
+    @Test
+    void getContainerLog_trimsToTailAndPicksSortedPod() throws Exception {
+        when(stackMapper.selectById(1)).thenReturn(stack());
+        when(clusterMapper.selectById(1)).thenReturn(cluster());
+        when(kubernetesClientFactory.getClient(cluster())).thenReturn(client);
+
+        MixedOperation podOps = mock(MixedOperation.class);
+        when(client.pods()).thenReturn(podOps);
+        NonNamespaceOperation podNs = mock(NonNamespaceOperation.class);
+        when(podOps.inNamespace(KubernetesStackServiceImpl.K8S_NAMESPACE)).thenReturn(podNs);
+        when(podNs.withLabel(anyString(), anyString())).thenReturn(podNs);
+        when(podNs.list()).thenReturn(new PodListBuilder()
+                .withItems(
+                        new PodBuilder().withNewMetadata().withName("vanilla-1-nginx-abc").endMetadata().build(),
+                        new PodBuilder().withNewMetadata().withName("vanilla-1-nginx-def").endMetadata().build())
+                .build());
+        PodResource podRes = mock(PodResource.class);
+        when(podNs.resource(any(io.fabric8.kubernetes.api.model.Pod.class))).thenReturn(podRes);
+        when(podRes.getLog()).thenReturn("line1\nline2\nline3\nline4");
+
+        ContainerLogVo vo = kubeStackService.getContainerLog(new ContainerLogsDto(1, 1, 1, 2));
+
+        // 排序后副本 1 → "vanilla-1-nginx-def"，日志截取最后 2 行
+        assertThat(vo.getContainerName()).isEqualTo("vanilla-1-nginx-def");
+        assertThat(vo.getLog()).isEqualTo("line3\nline4");
+    }
+
+    // ---- helpers ----
+
+    private StackDo stack() {
+        return StackDo.builder().id(1).clusterId(1).stackName("web")
+                .status(DataStatus.EXIST.ordinal()).build();
+    }
+
+    private ServiceDo service(int id, String name, int replicas) {
+        return ServiceDo.builder().id(id).stackId(1).serviceName(name).replicas(replicas)
+                .image("nginx:latest").build();
+    }
+
+    private PortDo port(String protocol, int port) {
+        return PortDo.builder().protocol(protocol).port(port).build();
+    }
+
+    private ClusterDo cluster() {
+        return ClusterDo.builder().id(1).type("K8S").status(DataStatus.EXIST.ordinal()).build();
+    }
+
+    private Deployment deployment(int serviceId, String name, String serviceLabel, int replicas, int ready) {
+        return new DeploymentBuilder()
+                .withNewMetadata()
+                .withName(name)
+                .addToLabels(Constants.STACK_ID_LABEL, "1")
+                .addToLabels(Constants.SERVICE_ID_LABEL, serviceLabel)
+                .endMetadata()
+                .withSpec(new DeploymentSpecBuilder().withReplicas(replicas).build())
+                .withStatus(new DeploymentStatusBuilder().withReadyReplicas(ready).build())
+                .build();
+    }
+
+    /**
+     * 状态查询/停止/下架共用的 Deployment 列表链：withLabel(...).list() 返回给定 Deployment
+     */
+    private void stubDeploymentsList(Deployment... deployments) {
+        Deps deps = stubDeployments();
+        stubDeploymentsListOn(deps, deployments);
+    }
+
+    private void stubDeploymentsListOn(Deps deps, Deployment... deployments) {
+        when(deps.nsOp.withLabel(anyString(), anyString())).thenReturn(deps.nsOp);
+        when(deps.nsOp.list()).thenReturn(new DeploymentListBuilder().withItems(deployments).build());
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void stubNamespace() {
+        // client.namespaces() 返回 MixedOperation，withName/resource 均直接在其上调用
+        MixedOperation<Namespace, NamespaceList, Resource<Namespace>> nsOps = mock(MixedOperation.class);
+        lenient().when(client.namespaces()).thenReturn(nsOps);
+        Resource<Namespace> nsGet = mock(Resource.class);
+        lenient().when(nsOps.withName(KubernetesStackServiceImpl.K8S_NAMESPACE)).thenReturn(nsGet);
+        lenient().when(nsGet.get()).thenReturn(null);
+        Resource<Namespace> nsRes = mock(Resource.class);
+        lenient().when(nsOps.resource(any(Namespace.class))).thenReturn(nsRes);
+        lenient().when(nsRes.create()).thenReturn(mock(Namespace.class));
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Deps stubDeployments() {
+        AppsAPIGroupDSL apps = mock(AppsAPIGroupDSL.class);
+        lenient().when(client.apps()).thenReturn(apps);
+        MixedOperation<Deployment, DeploymentList, RollableScalableResource<Deployment>> depOps = mock(MixedOperation.class);
+        lenient().when(apps.deployments()).thenReturn(depOps);
+        NonNamespaceOperation<Deployment, DeploymentList, RollableScalableResource<Deployment>> nsOp =
+                mock(NonNamespaceOperation.class);
+        lenient().when(depOps.inNamespace(KubernetesStackServiceImpl.K8S_NAMESPACE)).thenReturn(nsOp);
+        RollableScalableResource<Deployment> depRes = mock(RollableScalableResource.class);
+        lenient().when(nsOp.resource(any(Deployment.class))).thenReturn(depRes);
+        lenient().when(depRes.createOrReplace()).thenReturn(mock(Deployment.class));
+        // 孤儿清理与部署末段状态查询共用该链，默认空列表；状态/停止测试会覆盖为具体 items
+        lenient().when(nsOp.withLabel(anyString(), anyString())).thenReturn(nsOp);
+        lenient().when(nsOp.list()).thenReturn(new DeploymentListBuilder().build());
+        Deps deps = new Deps();
+        deps.nsOp = nsOp;
+        return deps;
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void stubPvc() {
+        MixedOperation<PersistentVolumeClaim, io.fabric8.kubernetes.api.model.PersistentVolumeClaimList,
+                Resource<PersistentVolumeClaim>> pvcOps = mock(MixedOperation.class);
+        lenient().when(client.persistentVolumeClaims()).thenReturn(pvcOps);
+        NonNamespaceOperation<PersistentVolumeClaim, io.fabric8.kubernetes.api.model.PersistentVolumeClaimList,
+                Resource<PersistentVolumeClaim>> pvcNs = mock(NonNamespaceOperation.class);
+        lenient().when(pvcOps.inNamespace(KubernetesStackServiceImpl.K8S_NAMESPACE)).thenReturn(pvcNs);
+        Resource<PersistentVolumeClaim> pvcGet = mock(Resource.class);
+        lenient().when(pvcNs.withName(anyString())).thenReturn(pvcGet);
+        lenient().when(pvcGet.get()).thenReturn(null);
+        Resource<PersistentVolumeClaim> pvcRes = mock(Resource.class);
+        lenient().when(pvcNs.resource(any())).thenReturn(pvcRes);
+        lenient().when(pvcRes.create()).thenReturn(mock(PersistentVolumeClaim.class));
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Services stubServicesList(List<Service> items) {
+        MixedOperation<Service, ServiceList, ServiceResource<Service>> svcOps = mock(MixedOperation.class);
+        lenient().when(client.services()).thenReturn(svcOps);
+        NonNamespaceOperation<Service, ServiceList, ServiceResource<Service>> svcNsOp = mock(NonNamespaceOperation.class);
+        lenient().when(svcOps.inNamespace(KubernetesStackServiceImpl.K8S_NAMESPACE)).thenReturn(svcNsOp);
+        ServiceResource<Service> svcRes = mock(ServiceResource.class);
+        lenient().when(svcNsOp.resource(any(Service.class))).thenReturn(svcRes);
+        lenient().when(svcRes.create()).thenReturn(mock(Service.class));
+        // upsertService 先 withName(name).get() 判幂等：默认不存在 → 走 create
+        ServiceResource<Service> svcGet = mock(ServiceResource.class);
+        lenient().when(svcNsOp.withName(anyString())).thenReturn(svcGet);
+        lenient().when(svcGet.get()).thenReturn(null);
+        lenient().when(svcNsOp.withLabel(anyString(), anyString())).thenReturn(svcNsOp);
+        ServiceList list = mock(ServiceList.class);
+        lenient().when(list.getItems()).thenReturn(items);
+        lenient().when(svcNsOp.list()).thenReturn(list);
+        Services s = new Services();
+        s.svcNsOp = svcNsOp;
+        return s;
+    }
+
+    private static class Deps {
+        NonNamespaceOperation<Deployment, DeploymentList, RollableScalableResource<Deployment>> nsOp;
+    }
+
+    private static class Services {
+        NonNamespaceOperation<Service, ServiceList, ServiceResource<Service>> svcNsOp;
+    }
+}
