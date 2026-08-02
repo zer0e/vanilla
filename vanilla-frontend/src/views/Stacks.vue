@@ -35,7 +35,11 @@
 
       <el-table :data="stacks" stripe>
         <el-table-column prop="id" label="ID" width="60" />
-        <el-table-column prop="stackName" label="栈名称" min-width="120" />
+        <el-table-column label="栈名称" min-width="140">
+          <template #default="{ row }">
+            <el-link type="primary" @click="goDetail(row)">{{ row.stackName }}</el-link>
+          </template>
+        </el-table-column>
         <el-table-column
           prop="description"
           label="描述"
@@ -51,34 +55,9 @@
           </template>
         </el-table-column>
         <el-table-column prop="createTime" label="创建时间" width="165" />
-        <el-table-column label="操作" width="340" fixed="right">
+        <el-table-column label="操作" width="150" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" link @click="goDetail(row)">服务</el-button>
-            <el-button
-              type="success"
-              link
-              :loading="deployingId === row.id"
-              @click="handleDeploy(row)"
-            >
-              部署
-            </el-button>
             <el-button type="warning" link @click="showStatus(row)">状态</el-button>
-            <el-button
-              type="info"
-              link
-              :loading="stoppingId === row.id"
-              @click="handleStop(row)"
-            >
-              停止
-            </el-button>
-            <el-button
-              type="danger"
-              link
-              :loading="removingId === row.id"
-              @click="handleRemove(row)"
-            >
-              下架
-            </el-button>
             <el-button type="primary" link @click="openDialog(row)">编辑</el-button>
             <el-button type="danger" link @click="handleDelete(row)">删除</el-button>
           </template>
@@ -166,10 +145,7 @@ import {
   createStack,
   updateStack,
   deleteStack,
-  deployStack,
-  stackStatus,
-  stopStack,
-  removeStack
+  stackStatus
 } from '@/api/stack'
 import { getClusters } from '@/api/cluster'
 import { statusMeta } from '@/utils/constants'
@@ -186,10 +162,6 @@ const page = ref(1)
 const size = ref(15)
 const search = ref('')
 const statusMap = reactive({})
-
-const deployingId = ref(null)
-const stoppingId = ref(null)
-const removingId = ref(null)
 
 const dialogVisible = ref(false)
 const formRef = ref()
@@ -309,29 +281,6 @@ const handleSave = () => {
   })
 }
 
-const handleDeploy = (row) => {
-  ElMessageBox.confirm(
-    `确定部署栈「${row.stackName}」到集群吗？将拉取镜像并按策略创建容器。`,
-    '部署确认',
-    { confirmButtonText: '部署', cancelButtonText: '取消' }
-  )
-    .then(async () => {
-      deployingId.value = row.id
-      try {
-        const res = await deployStack(row.id)
-        if (res?.status) {
-          statusMap[row.id] = res.status
-        }
-        ElMessage.success(`部署成功，当前状态：${statusMeta(res?.status).label}`)
-      } catch (e) {
-        // 拦截器已提示（如端口冲突等）
-      } finally {
-        deployingId.value = null
-      }
-    })
-    .catch(() => {})
-}
-
 const showStatus = async (row) => {
   try {
     const res = await stackStatus(row.id)
@@ -343,48 +292,6 @@ const showStatus = async (row) => {
   } catch (e) {
     // 拦截器已提示
   }
-}
-
-const handleStop = (row) => {
-  ElMessageBox.confirm(
-    `确定停止栈「${row.stackName}」下所有容器吗？`,
-    '停止确认',
-    { confirmButtonText: '停止', cancelButtonText: '取消' }
-  )
-    .then(async () => {
-      stoppingId.value = row.id
-      try {
-        await stopStack(row.id)
-        ElMessage.success('栈已停止')
-        await refreshStatuses()
-      } catch (e) {
-        // 拦截器已提示
-      } finally {
-        stoppingId.value = null
-      }
-    })
-    .catch(() => {})
-}
-
-const handleRemove = (row) => {
-  ElMessageBox.confirm(
-    `确定下架栈「${row.stackName}」吗？将删除栈下所有容器（含停止的）。`,
-    '下架确认',
-    { confirmButtonText: '下架', cancelButtonText: '取消', type: 'warning' }
-  )
-    .then(async () => {
-      removingId.value = row.id
-      try {
-        await removeStack(row.id)
-        ElMessage.success('栈已下架')
-        await refreshStatuses()
-      } catch (e) {
-        // 拦截器已提示
-      } finally {
-        removingId.value = null
-      }
-    })
-    .catch(() => {})
 }
 
 const handleDelete = (row) => {
